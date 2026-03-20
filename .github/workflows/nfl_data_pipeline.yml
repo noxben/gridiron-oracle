@@ -1,0 +1,171 @@
+# .github/workflows/nfl_data_pipeline.yml
+# Gridiron Oracle — Automated data pipeline
+#
+# Runs:
+#   - Every Tuesday  at 12:00 UTC (8am ET) — after MNF stats are processed
+#   - Every Thursday at 13:00 UTC (9am ET) — before TNF, captures Thu injury report
+#   - Manual trigger (workflow_dispatch) for on-demand runs
+#
+# Secrets required (set in GitHub repo → Settings → Secrets):
+#   None for data pipeline (nfl_data_py pulls from public endpoints)
+#
+# After update: creates a PR (or auto-commits to main) with the new nfl_data.js
+
+name: NFL Data Pipeline
+
+on:
+  schedule:
+    # Tuesday 12:00 UTC — after Monday Night Football stats finalize
+    - cron: "0 12 * * 2"
+    # Thursday 13:00 UTC — before Thursday Night Football, captures injury report
+    - cron: "0 13 * * 4"
+
+  workflow_dispatch:
+    inputs:
+      week:
+        description: "NFL week number (leave blank to auto-detect)"
+        required: false
+        type: string
+      season:
+        description: "NFL season year"
+        required: false
+        default: "2024"
+        type: string
+      dry_run:
+        description: "Dry run (build data but don't commit)"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  update-data:
+    name: Update NFL Data
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      # ── Checkout ─────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # ── Python setup ─────────────────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install nfl_data_py pandas requests python-dotenv
+
+      # ── Run pipeline ──────────────────────────────────────────────────────
+      - name: Run data pipeline
+        id: pipeline
+        run: |
+          ARGS=""
+          if [ -n "${{ github.event.inputs.week }}" ]; then
+            ARGS="$ARGS --week ${{ github.event.inputs.week }}"
+          fi
+          if [ -n "${{ github.event.inputs.season }}" ]; then
+            ARGS="$ARGS --season ${{ github.event.inputs.season }}"
+          fi
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+
+          python scripts/update_nfl_data.py $ARGS
+
+          # Capture player count for commit message
+          PLAYER_COUNT=$(python -c "
+          import re, json
+          content = open('src/utils/nfl_data.js').read()
+          m = re.search(r'player_count: (\d+)', content)
+          print(m.group(1) if m else '?')
+          ")
+          echo "player_count=$PLAYER_COUNT" >> $GITHUB_OUTPUT
+
+      # ── Validate ──────────────────────────────────────────────────────────
+      - name: Validate output
+        run: |
+          python scripts/validate_data.py
+
+      # ── Commit and push ───────────────────────────────────────────────────
+      - name: Check for changes
+        id: changes
+        run: |
+          git diff --quiet src/utils/nfl_data.js && echo "changed=false" >> $GITHUB_OUTPUT || echo "changed=true" >> $GITHUB_OUTPUT
+
+      - name: Commit updated nfl_data.js
+        if: steps.changes.outputs.changed == 'true' && github.event.inputs.dry_run != 'true'
+        run: |
+          git config user.name  "Gridiron Oracle Bot"
+          git config user.email "bot@gridiron-oracle.app"
+
+          # Detect day for commit message context
+          DAY=$(date +%A)
+          WEEK_LABEL="Weekly update"
+          if [ "$DAY" = "Tuesday" ]; then
+            WEEK_LABEL="Post-MNF stats update"
+          elif [ "$DAY" = "Thursday" ]; then
+            WEEK_LABEL="Pre-TNF injury update"
+          fi
+
+          git add src/utils/nfl_data.js
+          git commit -m "data: $WEEK_LABEL — ${{ steps.pipeline.outputs.player_count }} players [${{ github.run_id }}]"
+          git push origin main
+
+      - name: No changes detected
+        if: steps.changes.outputs.changed == 'false'
+        run: echo "nfl_data.js is already up to date — no commit needed"
+
+      # ── Failure notification ───────────────────────────────────────────────
+      - name: Pipeline summary
+        if: always()
+        run: |
+          echo "## Pipeline Result" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Players:** ${{ steps.pipeline.outputs.player_count }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Changes committed:** ${{ steps.changes.outputs.changed }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Run:** ${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
+
+  # Separate job: injury-only overlay (runs Thursday + Sunday without full stat refresh)
+  injury-overlay:
+    name: Injury Report Overlay
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Only run on Sundays (separate from Tuesday/Thursday full pipeline)
+    if: github.event_name == 'schedule' && github.event.schedule == '0 15 * * 0'
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - run: pip install nfl_data_py pandas python-dotenv
+
+      - name: Apply injury overlay
+        run: python scripts/injury_overlay.py
+
+      - name: Commit if changed
+        run: |
+          git config user.name  "Gridiron Oracle Bot"
+          git config user.email "bot@gridiron-oracle.app"
+          git diff --quiet src/utils/nfl_data.js || (
+            git add src/utils/nfl_data.js &&
+            git commit -m "data: Sunday injury overlay [${{ github.run_id }}]" &&
+            git push origin main
+          )
