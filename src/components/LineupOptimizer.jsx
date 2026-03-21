@@ -18,18 +18,18 @@ import {
 // ---------------------------------------------------------------------------
 
 const C = {
-  bg:        '#111318',
-  surface:   '#181c22',
-  border:    '#252b34',
-  borderMid: '#2e3640',
-  text:      '#e8e5de',
-  textMid:   '#8a949e',
-  textDim:   '#4a5260',
+  bg:        '#1a1d23',
+  surface:   '#22262e',
+  border:    '#333a45',
+  borderMid: '#3d4652',
+  text:      '#f0ede6',
+  textMid:   '#a8b0bc',
+  textDim:   '#6a7585',
   accent:    '#c8ff00',
-  accentDim: '#4a5e00',
-  red:       '#e05050',
-  amber:     '#e0a030',
-  green:     '#50c878',
+  accentDim: '#5a7000',
+  red:       '#ff6b6b',
+  amber:     '#ffb84d',
+  green:     '#5ddd8a',
 };
 
 const POS_COLOR = {
@@ -449,29 +449,38 @@ export default function LineupOptimizer() {
 
   // Build initial lineup on mount
   useEffect(() => {
-    if (!MY_ROSTER || MY_ROSTER.length === 0) return;
+  console.log('MY_ROSTER:', MY_ROSTER?.map(p => `${p.name} | on_bench:${p.on_bench} | slot:${p.lineup_slot}`));
+  if (!MY_ROSTER || MY_ROSTER.length === 0) return;
 
-    try {
-      const optimal  = getOptimalLineup(MY_ROSTER, {}, leagueSize);
-      const usedIds  = new Set(optimal.map(p => p.espn_id ?? p.gsisId));
-      const benchPlayers = MY_ROSTER
-        .filter(p => !usedIds.has(p.espn_id))
-        .map(p => ({
-          ...p,
-          gsisId:       p.espn_id,
-          projectedPts: p.projected_points ?? p.avg_points ?? 0,
-          play_probability: p.play_probability ?? 1.0,
-        }));
+  const starters = MY_ROSTER
+    .filter(p => !p.on_bench && !p.on_ir)
+    .map(p => ({
+      ...p,
+      gsisId:          p.espn_id,
+      projectedPts:    p.projected_points ?? p.avg_points ?? 0,
+      play_probability: p.play_probability ?? 1.0,
+      compositeRating: 50,
+      vorp:            0,
+      varianceMult:    1.0,
+      varianceProfile: 'standard',
+      scores:          { epa: 50, usage: 50, snap: 50, redZone: 50 },
+      opp_def_rank:    16,
+      lineupSlot:      p.lineup_slot,
+    }));
 
-      setLineup(optimal);
-      setBench(benchPlayers);
-      runSim(optimal, {});
-    } catch (err) {
-      console.error('Lineup build failed:', err);
-      // Fallback: use ESPN roster directly without nfl_data.js
-      buildFallbackLineup();
-    }
-  }, []);
+  const benchPlayers = MY_ROSTER
+    .filter(p => p.on_bench || p.on_ir)
+    .map(p => ({
+      ...p,
+      gsisId:          p.espn_id,
+      projectedPts:    p.projected_points ?? p.avg_points ?? 0,
+      play_probability: p.play_probability ?? 1.0,
+    }));
+
+  setLineup(starters);
+  setBench(benchPlayers);
+  runFallbackSim(starters);
+}, []);
 
   // Fallback: build lineup from ESPN data alone (before nfl_data.js is populated)
   const buildFallbackLineup = useCallback(() => {
@@ -763,7 +772,7 @@ const thStyle = {
   fontSize: '9px',
   letterSpacing: '0.16em',
   textTransform: 'uppercase',
-  color: '#2e3540',
+  color: '#6a7585',   // was #2e3540
   textAlign: 'left',
   padding: '8px 0',
   fontWeight: '400',
