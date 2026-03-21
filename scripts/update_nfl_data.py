@@ -129,10 +129,8 @@ def fetch_nflfastr_data(season: int, week: int) -> pd.DataFrame:
             "fantasy_points",   # standard scoring
             "fantasy_points_ppr",
             # Snap counts
-            "offense_snaps",
-            "offense_pct",      # snap participation %
+            # snap participation %
             # Red zone
-            "red_zone_targets",
         ],
     )
 
@@ -154,7 +152,7 @@ def fetch_nflfastr_data(season: int, week: int) -> pd.DataFrame:
             position=("position", "last"),
             team=("recent_team", "last"),
             season_avg_pts=("fantasy_points_ppr", "mean"),
-            season_snaps=("offense_pct", "mean"),
+            snap_pct=("wopr", "mean"),
             season_targets=("targets", "sum"),
             season_carries=("carries", "sum"),
             season_games=("week", "count"),
@@ -169,8 +167,8 @@ def fetch_nflfastr_data(season: int, week: int) -> pd.DataFrame:
         .groupby("player_id")
         .agg(
             last3_avg_pts=("fantasy_points_ppr", "mean"),
-            last3_snap_pct=("offense_pct", "mean"),
-            last3_targets=("targets", "mean"),
+			snap_pct=("wopr", "mean"),            
+			last3_targets=("targets", "mean"),
             last3_carries=("carries", "mean"),
         )
         .reset_index()
@@ -252,10 +250,6 @@ def fetch_epa_per_play(season: int, week: int) -> pd.DataFrame:
 
 
 def fetch_usage_stats(weekly: pd.DataFrame, week: int) -> pd.DataFrame:
-    """
-    Extract target share, carry share, snap %, air yards share, red zone share
-    from the current week's data (most recent week available).
-    """
     current_week = weekly[weekly["week"] == week].copy()
     if current_week.empty:
         current_week = weekly[weekly["week"] == weekly["week"].max()].copy()
@@ -265,17 +259,14 @@ def fetch_usage_stats(weekly: pd.DataFrame, week: int) -> pd.DataFrame:
         .agg(
             target_share=("target_share", "mean"),
             air_yards_share=("air_yards_share", "mean"),
-            snap_pct=("offense_pct", "mean"),
-            red_zone_targets=("red_zone_targets", "sum"),
+            snap_pct=("wopr", "mean"),
         )
         .reset_index()
         .rename(columns={"player_id": "gsis_id"})
     )
 
-    # Approximate red zone share (normalize within team — imperfect but usable)
-    usage["red_zone_share"] = usage["red_zone_targets"] / usage["red_zone_targets"].clip(lower=1)
-
-    return usage.drop(columns=["red_zone_targets"])
+    usage["red_zone_share"] = 0.0
+    return usage
 
 
 # ---------------------------------------------------------------------------
