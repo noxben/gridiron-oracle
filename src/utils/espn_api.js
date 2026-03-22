@@ -22,7 +22,7 @@ import { batchEspnToGsis } from './id_mapping.js';
 // Config
 // ---------------------------------------------------------------------------
 
-const ESPN_BASE = 'https://fantasy.espn.com/apis/v3/games/ffl';
+const ESPN_BASE = '/espn-api/apis/v3/games/ffl';
 const SEASON    = 2024;
 const LEAGUE_ID = 839979;
 
@@ -122,6 +122,9 @@ export function setESPNCredentials(espnS2, swid) {
   if (!espnS2 || !swid) throw new Error('Both ESPN_S2 and SWID are required');
   sessionStorage.setItem('ESPN_S2', espnS2.trim());
   sessionStorage.setItem('SWID',    swid.trim());
+  // Expose to Vite proxy (dev only)
+  globalThis.__ESPN_S2__ = espnS2.trim();
+  globalThis.__SWID__    = swid.trim();
 }
 
 export function clearESPNCredentials() {
@@ -157,37 +160,26 @@ export class ESPNApiError extends Error {
 // ---------------------------------------------------------------------------
 
 async function espnFetch(url, params = {}) {
-  const urlObj = new URL(url);
+  const urlObj = new URL(url, window.location.origin);
   Object.entries(params).forEach(([k, v]) => urlObj.searchParams.set(k, v));
 
-  let headers;
-  try {
-    headers = getAuthHeaders();
-  } catch (e) {
-    throw e; // re-throw auth errors as-is
-  }
-
   const response = await fetch(urlObj.toString(), {
-    method:      'GET',
-    headers,
-    credentials: 'include',
+    method: 'GET',
+    credentials: 'omit',
   });
 
+  // DEBUG — remove after diagnosis
+  const text = await response.text();
+  console.log('ESPN response status:', response.status);
+  console.log('ESPN response body (first 300 chars):', text.slice(0, 300));
+
   if (response.status === 401 || response.status === 403) {
-    throw new ESPNAuthError(
-      'ESPN auth failed — your ESPN_S2 or SWID may have expired. ' +
-      'Go to fantasy.espn.com, log in, and re-copy your cookies.'
-    );
+    throw new ESPNAuthError('ESPN auth failed — your ESPN_S2 or SWID may have expired.');
   }
-
   if (!response.ok) {
-    throw new ESPNApiError(
-      `ESPN API returned ${response.status} for ${urlObj.pathname}`,
-      response.status,
-    );
+    throw new ESPNApiError(`ESPN API returned ${response.status}`, response.status);
   }
-
-  return response.json();
+  return JSON.parse(text);
 }
 
 // ---------------------------------------------------------------------------
