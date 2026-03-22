@@ -254,7 +254,7 @@ function PlayerRow({ player, override, onOverride, rank, isVarianceKing }) {
                 textTransform: 'uppercase',
               }}>⚡ key</span>
             )}
-            // In PlayerRow, next to InjuryDot:
+
 			{hasWeatherImpact(player.team) && (
 			  <span title={getWeatherAdvisory(player.team).join(' · ')}
 					style={{ marginLeft: '6px', fontSize: '10px' }}>🌬</span>
