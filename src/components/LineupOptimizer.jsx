@@ -4,12 +4,16 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { MY_ROSTER, MY_TEAM, MATCHUP, LEAGUE } from '../utils/espn_data.js';
+import { ESPN_LEAGUE_DATA } from '../utils/espn_league.js';
+import { ESPN_TO_GSIS } from '../utils/id_mapping.js';
 import {
   prepareLineup,
   runSimulation,
+  simulateMatchup,
   getOptimalLineup,
   rerunWithOverrides,
 } from '../utils/simulator.js';
+import { hasWeatherImpact, getWeatherAdvisory } from '../utils/weather_data.js';
 
 // ---------------------------------------------------------------------------
 // Design: dark analytical dashboard — think Bloomberg terminal meets
@@ -250,6 +254,11 @@ function PlayerRow({ player, override, onOverride, rank, isVarianceKing }) {
                 textTransform: 'uppercase',
               }}>⚡ key</span>
             )}
+            // In PlayerRow, next to InjuryDot:
+			{hasWeatherImpact(player.team) && (
+			  <span title={getWeatherAdvisory(player.team).join(' · ')}
+					style={{ marginLeft: '6px', fontSize: '10px' }}>🌬</span>
+			)}
           </div>
           <div style={{ fontSize: '10px', color: C.textDim, marginTop: '2px', paddingLeft: '36px' }}>
             {player.team}
@@ -523,6 +532,7 @@ export default function LineupOptimizer() {
   }, []);
 
   // Run simulation with current lineup + overrides
+  // v2.0: uses real opponent roster from espn_league.js via simulateMatchup
   const runSim = useCallback(async (currentLineup, currentOverrides) => {
     if (!currentLineup || currentLineup.length === 0) return;
 
@@ -530,23 +540,51 @@ export default function LineupOptimizer() {
     setProgress(0);
 
     try {
-      // Build opponent lineup (use matchup projected as a flat estimate)
+      const oppTeamId = matchup?.opp_team_id;
+
+      // v2.0 path: real opponent roster available
+      if (oppTeamId && ESPN_LEAGUE_DATA?.rosters?.[String(oppTeamId)]) {
+        const myRoster = currentLineup.map(p => ({
+          ...p,
+          gsisId:           p.gsisId ?? p.espn_id,
+          projectedPts:     p.projectedPts ?? p.projected_points ?? p.avg_points ?? 5,
+          play_probability: p.play_probability ?? 1.0,
+          varianceMult:     p.varianceMult ?? 1.0,
+          position:         p.position ?? 'WR',
+          onBench:          false,
+          onIR:             false,
+        }));
+
+        const simResult = await simulateMatchup(
+          myRoster,
+          oppTeamId,
+          ESPN_LEAGUE_DATA,
+          ESPN_TO_GSIS,
+          currentOverrides ?? {},
+          { leagueSize, onProgress: setProgress },
+        );
+        setResult(simResult);
+        setSimStatus('done');
+        return;
+      }
+
+      // Fallback: espn_league.js not loaded or opponent not found — use projected total
+      console.warn('[LineupOptimizer] espn_league.js not available — falling back to synthetic opponent');
       const oppProjected = matchup?.opp_projected ?? 100;
-      const oppLineup    = buildOpponentLineup(oppProjected, leagueSize);
+      const oppLineup    = buildSyntheticOpponent(oppProjected);
 
       const prepared = currentLineup.map(p => ({
         ...p,
-        projectedPts: p.projectedPts ?? p.projected_points ?? p.avg_points ?? 5,
+        projectedPts:     p.projectedPts ?? p.projected_points ?? p.avg_points ?? 5,
         play_probability: p.play_probability ?? 1.0,
-        varianceMult: p.varianceMult ?? 1.0,
-        position: p.position ?? 'WR',
+        varianceMult:     p.varianceMult ?? 1.0,
+        position:         p.position ?? 'WR',
       }));
 
       const simResult = await runSimulation(prepared, oppLineup, {
         leagueSize,
         onProgress: setProgress,
       });
-
       setResult(simResult);
       setSimStatus('done');
     } catch (err) {
@@ -555,13 +593,37 @@ export default function LineupOptimizer() {
     }
   }, [leagueSize, matchup]);
 
-  // Fallback sim (no nfl_data.js)
+  // Fallback sim — called on mount before nfl_data.js composite ratings are applied
+  // Still uses simulateMatchup for the opponent if espn_league.js is available
   const runFallbackSim = useCallback(async (starters) => {
     setSimStatus('running');
     setProgress(0);
     try {
+      const oppTeamId = matchup?.opp_team_id;
+
+      if (oppTeamId && ESPN_LEAGUE_DATA?.rosters?.[String(oppTeamId)]) {
+        const myRoster = starters.map(p => ({
+          ...p,
+          gsisId:           p.gsisId ?? p.espn_id,
+          onBench:          false,
+          onIR:             false,
+        }));
+        const simResult = await simulateMatchup(
+          myRoster,
+          oppTeamId,
+          ESPN_LEAGUE_DATA,
+          ESPN_TO_GSIS,
+          {},
+          { leagueSize, onProgress: setProgress },
+        );
+        setResult(simResult);
+        setSimStatus('done');
+        return;
+      }
+
+      // Pure fallback — no league data
       const oppProjected = matchup?.opp_projected ?? 100;
-      const oppLineup    = buildOpponentLineup(oppProjected, leagueSize);
+      const oppLineup    = buildSyntheticOpponent(oppProjected);
       const simResult    = await runSimulation(starters, oppLineup, {
         leagueSize,
         onProgress: setProgress,
@@ -669,6 +731,11 @@ export default function LineupOptimizer() {
               {result && (
                 <div style={{ fontSize: '10px', color: C.textDim, marginTop: '4px' }}>
                   p10 / p50 / p90
+                </div>
+              )}
+              {result?.usedRealOppRoster && (
+                <div style={{ fontSize: '9px', color: C.green, marginTop: '3px', letterSpacing: '0.08em' }}>
+                  ✓ real opponent roster
                 </div>
               )}
             </div>
@@ -780,10 +847,11 @@ const thStyle = {
 };
 
 /**
- * Build a synthetic opponent lineup for simulation.
- * Uses the matchup projected total distributed across positions.
+ * Synthetic opponent fallback — used only when espn_league.js is unavailable.
+ * Distributes a projected total across positions using historical weights.
+ * v2.0: this should rarely fire — simulateMatchup uses the real roster instead.
  */
-function buildOpponentLineup(totalProjected, leagueSize) {
+function buildSyntheticOpponent(totalProjected) {
   const positions = ['QB', 'RB', 'RB', 'WR', 'WR', 'TE', 'FLEX', 'K', 'DST'];
   const weights   = [0.18, 0.12, 0.10, 0.12, 0.11, 0.09, 0.10, 0.05, 0.08];
   const replacement = { QB: 15, RB: 8, WR: 9, TE: 6, FLEX: 9, K: 7, DST: 7 };

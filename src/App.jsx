@@ -1,11 +1,17 @@
 // App.jsx — Gridiron Oracle
 // ESPN data fetched via: python3 scripts/fetch_espn_roster.py
+// League data fetched via: python3 scripts/fetch_espn_league.py
 
 import { useState } from 'react';
 import LineupOptimizer  from './components/LineupOptimizer.jsx';
 import MatchupExplorer  from './components/MatchupExplorer.jsx';
+import LeagueHome       from './components/LeagueHome.jsx';
 
-const VIEWS = { LINEUP: 'lineup', MATCHUP: 'matchup' };
+const VIEWS = {
+  LINEUP:  'lineup',
+  MATCHUP: 'matchup',
+  LEAGUE:  'league',
+};
 
 const font = '"DM Mono", "Fira Mono", monospace';
 const C    = { bg: '#1a1d23', border: '#333a45', accent: '#c8ff00', textDim: '#6a7585', text: '#a8b0bc' };
@@ -24,7 +30,8 @@ function Nav({ view, setView }) {
       boxShadow:  '0 4px 24px rgba(0,0,0,0.4)',
     }}>
       {[
-        { key: VIEWS.LINEUP,  label: 'Lineup' },
+        { key: VIEWS.LEAGUE,  label: 'League'  },
+        { key: VIEWS.LINEUP,  label: 'Lineup'  },
         { key: VIEWS.MATCHUP, label: 'Matchup' },
       ].map(({ key, label }) => (
         <button
@@ -57,6 +64,7 @@ export default function App() {
 
   return (
     <>
+      {view === VIEWS.LEAGUE  && <LeagueHome />}
       {view === VIEWS.LINEUP  && <LineupOptimizer />}
       {view === VIEWS.MATCHUP && <MatchupExplorer onBack={() => setView(VIEWS.LINEUP)} />}
       <Nav view={view} setView={setView} />

@@ -11,6 +11,10 @@
 //   runSimulation(myLineup, oppLineup, options) → SimResult
 //   computeCompositeRating(player, leagueSize) → number
 //   getReplacementLevel(position, leagueSize) → number
+//
+// v2.0 additions (spec §4.2):
+//   buildOppLineupFromLeagueData(oppTeamId, leagueData, idMapping) → rosterArray
+//   simulateMatchup(myRoster, oppTeamId, leagueData, idMapping, overrides, options) → Promise<SimResult>
 
 import { PLAYER_BY_GSIS_ID, PLAYERS_BY_POSITION } from './nfl_data.js';
 
@@ -290,6 +294,121 @@ function scoreLineupOnce(lineup, replacementMap) {
 }
 
 // ---------------------------------------------------------------------------
+// v2.0 — Real opponent lineup from espn_league.js
+// ---------------------------------------------------------------------------
+
+/**
+ * Build an opponent's roster array from espn_league.js data, in the shape
+ * that prepareLineup() already expects.
+ *
+ * This replaces synthetic opponent estimation with the actual opponent roster.
+ * Per spec v2.0 §4.2 simulateMatchup requirement.
+ *
+ * The opponent's starters are their ESPN-set lineup (lineup_slot !== BENCH/IR).
+ * If ESPN hasn't set a lineup yet (offseason / early week), fall back to
+ * building an optimal lineup from their roster using projected_points —
+ * same fallback logic as fetch_espn_roster.py's build_optimal_lineup().
+ *
+ * @param {number|string} oppTeamId   - opponent's team_id from espn_league.js
+ * @param {Object}        leagueData  - full ESPN_LEAGUE_DATA object
+ * @param {Object}        idMapping   - ESPN_TO_GSIS map from id_mapping.js
+ * @returns {Array} roster array shaped for prepareLineup()
+ *   Each entry: { gsisId, espnId, name, position, lineupSlot, onBench, onIR,
+ *                 playProbability, projectedPts, injuryDetail }
+ */
+export function buildOppLineupFromLeagueData(oppTeamId, leagueData, idMapping) {
+  const roster = leagueData.rosters?.[String(oppTeamId)];
+
+  if (!roster || roster.length === 0) {
+    console.warn(`[simulator] No roster found for opponent team_id=${oppTeamId}`);
+    return [];
+  }
+
+  // Map each ESPN roster entry → simulator-compatible object
+  const mapped = roster.map(p => ({
+    gsisId:          idMapping[p.espn_id] ?? null,   // null if not in mapping
+    espnId:          p.espn_id,
+    name:            p.name,
+    position:        p.position,
+    lineupSlot:      p.lineup_slot,
+    onBench:         p.on_bench,
+    onIR:            p.on_ir,
+    playProbability: p.play_probability ?? 1.0,
+    projectedPts:    p.projected_points ?? p.avg_points ?? 5.0,
+    injuryDetail:    p.injury_detail ?? '',
+  }));
+
+  // Check if ESPN has an active lineup set (at least one non-bench, non-IR starter)
+  const hasLineupSet = mapped.some(p => !p.onBench && !p.onIR);
+
+  if (hasLineupSet) {
+    // Use ESPN's lineup — opponent set their starters
+    return mapped;
+  }
+
+  // Fallback: ESPN hasn't set a lineup (offseason, early week, or lazy manager).
+  // Build optimal from projected_points — mirrors build_optimal_lineup() in Python.
+  console.info(`[simulator] Opponent team ${oppTeamId} has no lineup set — building optimal`);
+  return buildOptimalFromProjected(mapped);
+}
+
+/**
+ * Build optimal starting lineup from projected points when ESPN lineup is unset.
+ * Mirrors build_optimal_lineup() in fetch_espn_roster.py — keep in sync.
+ * Lineup: QB RB RB WR WR TE FLEX K DST
+ *
+ * @param {Array} players - full roster (bench + starters mixed)
+ * @returns {Array} players with onBench updated correctly
+ */
+function buildOptimalFromProjected(players) {
+  const byPos = {};
+  for (const p of players) {
+    if (!byPos[p.position]) byPos[p.position] = [];
+    byPos[p.position].push(p);
+  }
+  for (const pos of Object.keys(byPos)) {
+    byPos[pos].sort((a, b) => b.projectedPts - a.projectedPts);
+  }
+
+  const used    = new Set();
+  const starters = [];
+
+  const pick = (pos, slot) => {
+    const candidates = byPos[pos] ?? [];
+    const best = candidates.find(p => !used.has(p.espnId));
+    if (best) {
+      used.add(best.espnId);
+      starters.push({ ...best, lineupSlot: slot ?? pos, onBench: false, onIR: false });
+    }
+  };
+
+  pick('QB');
+  pick('RB'); pick('RB');
+  pick('WR'); pick('WR');
+  pick('TE');
+  pick('K');
+  pick('DST');
+
+  // FLEX — best remaining RB/WR/TE
+  const flexPool = ['RB', 'WR', 'TE']
+    .flatMap(pos => byPos[pos] ?? [])
+    .filter(p => !used.has(p.espnId))
+    .sort((a, b) => b.projectedPts - a.projectedPts);
+
+  if (flexPool[0]) {
+    used.add(flexPool[0].espnId);
+    starters.push({ ...flexPool[0], lineupSlot: 'FLEX', onBench: false, onIR: false });
+  }
+
+  // Remaining go to bench
+  const bench = players
+    .filter(p => !used.has(p.espnId))
+    .map(p => ({ ...p, lineupSlot: 'BENCH', onBench: true }));
+
+  return [...starters, ...bench];
+}
+
+// ---------------------------------------------------------------------------
 // Main simulation
 // ---------------------------------------------------------------------------
 
@@ -342,6 +461,51 @@ export function prepareLineup(espnRoster, overrides = {}, leagueSize = 12) {
         injuryDetail:    rosterEntry.injuryDetail,
       };
     });
+}
+
+/**
+ * simulateMatchup — v2.0 entry point for real opponent simulation.
+ *
+ * Replaces the v0.1 pattern of passing a synthetic opponent.
+ * Builds the opponent lineup from actual espn_league.js roster data,
+ * then runs the full Monte Carlo sim.
+ *
+ * Per spec v2.0 §4.2: "simulateMatchup(myRoster, oppRoster) — replaces
+ * synthetic opponent with real opponent roster from espn_league.js"
+ *
+ * @param {Array}         myRoster    - my roster from espn_data.js (MY_ROSTER)
+ * @param {number|string} oppTeamId   - opponent team_id from matchup data
+ * @param {Object}        leagueData  - ESPN_LEAGUE_DATA from espn_league.js
+ * @param {Object}        idMapping   - ESPN_TO_GSIS from id_mapping.js
+ * @param {Object}        overrides   - { [gsisId]: value } — my overrides only
+ * @param {Object}        options     - { leagueSize, onProgress }
+ * @returns {Promise<SimResult>}
+ */
+export async function simulateMatchup(
+  myRoster,
+  oppTeamId,
+  leagueData,
+  idMapping,
+  overrides = {},
+  options   = {},
+) {
+  const { leagueSize = 12 } = options;
+
+  // Build real opponent roster — this is the core v2.0 change
+  const oppRoster  = buildOppLineupFromLeagueData(oppTeamId, leagueData, idMapping);
+
+  const myLineup   = prepareLineup(myRoster,  overrides, leagueSize);
+  const oppLineup  = prepareLineup(oppRoster, {},        leagueSize);  // no overrides for opp
+
+  // Validate both lineups have starters before running
+  if (myLineup.length === 0) {
+    console.error('[simulator] simulateMatchup: my lineup is empty');
+  }
+  if (oppLineup.length === 0) {
+    console.warn('[simulator] simulateMatchup: opponent lineup is empty — opponent may not have set lineup yet');
+  }
+
+  return runSimulation(myLineup, oppLineup, options);
 }
 
 /**
@@ -443,9 +607,10 @@ function buildResult(myScores, oppScores, myLineup, oppLineup, elapsedMs) {
     highestVariancePlayer: findHighestVariancePlayer(myLineup),
 
     // Metadata
-    simRuns:   SIM_RUNS,
-    elapsedMs: Math.round(elapsedMs),
-    timestamp: new Date().toISOString(),
+    simRuns:          SIM_RUNS,
+    elapsedMs:        Math.round(elapsedMs),
+    timestamp:        new Date().toISOString(),
+    usedRealOppRoster: oppLineup.some(p => !p.isUnknown),  // v2.0 flag for UI
   };
 }
 
