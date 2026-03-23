@@ -7,12 +7,14 @@ import LineupOptimizer  from './components/LineupOptimizer.jsx';
 import MatchupExplorer  from './components/MatchupExplorer.jsx';
 import LeagueHome       from './components/LeagueHome.jsx';
 import InjuryDashboard  from './components/InjuryDashboard.jsx';
+import WaiverWire       from './components/WaiverWire.jsx';
 
 const VIEWS = {
   LEAGUE:  'league',
   LINEUP:  'lineup',
   MATCHUP: 'matchup',
   INJURY:  'injury',
+  WAIVER:  'waiver',
 };
 
 const font = '"DM Mono", "Fira Mono", monospace';
@@ -35,6 +37,7 @@ function Nav({ view, setView }) {
         { key: VIEWS.LEAGUE,  label: 'League'  },
         { key: VIEWS.LINEUP,  label: 'Lineup'  },
         { key: VIEWS.MATCHUP, label: 'Matchup' },
+        { key: VIEWS.WAIVER,  label: 'Waiver'  },
         { key: VIEWS.INJURY,  label: 'Injury'  },
       ].map(({ key, label }) => (
         <button
@@ -45,7 +48,7 @@ function Nav({ view, setView }) {
             color:         view === key ? '#0a0c0f' : C.text,
             border:        'none',
             borderRadius:  '5px',
-            padding:       '8px 18px',
+            padding:       '8px 16px',
             fontSize:      '11px',
             fontWeight:    view === key ? '700' : '400',
             letterSpacing: '0.12em',
@@ -70,6 +73,7 @@ export default function App() {
       {view === VIEWS.LEAGUE  && <LeagueHome />}
       {view === VIEWS.LINEUP  && <LineupOptimizer />}
       {view === VIEWS.MATCHUP && <MatchupExplorer onBack={() => setView(VIEWS.LINEUP)} />}
+      {view === VIEWS.WAIVER  && <WaiverWire />}
       {view === VIEWS.INJURY  && <InjuryDashboard />}
       <Nav view={view} setView={setView} />
     </>
