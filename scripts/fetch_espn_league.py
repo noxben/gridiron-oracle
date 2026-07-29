@@ -41,7 +41,7 @@ OUTPUT_PATH = ROOT / "src" / "utils" / "espn_league.js"
 ENV_PATH    = ROOT / ".env"
 
 LEAGUE_ID = 839979
-SEASON    = 2025   # ⚠ Update to 2026 before August 2026 — also rebuild id_mapping
+SEASON    = 2026   # ⚠ Update to 2026 before August 2026 — also rebuild id_mapping
 
 logging.basicConfig(
     level=logging.INFO,

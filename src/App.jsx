@@ -11,6 +11,7 @@ import LeagueHome       from './components/LeagueHome.jsx';
 import InjuryDashboard  from './components/InjuryDashboard.jsx';
 import WaiverWire       from './components/WaiverWire.jsx';
 import TradeAnalyzer    from './components/TradeAnalyzer.jsx';
+import { C, font } from './utils/theme.js';
 
 const VIEWS = {
   LEAGUE:  'league',

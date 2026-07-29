@@ -26,7 +26,7 @@ OUTPUT_PATH = ROOT / "src" / "utils" / "espn_data.js"
 ENV_PATH    = ROOT / ".env"
 
 LEAGUE_ID = 839979
-SEASON    = 2025
+SEASON    = 2026
 
 logging.basicConfig(
     level=logging.INFO,
