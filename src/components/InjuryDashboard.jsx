@@ -3,7 +3,8 @@
 // v2.0 Step 6 per spec §4.3 / §9
 
 import { useMemo } from 'react';
-import { MY_ROSTER, MY_TEAM, FETCHED_AT } from '../utils/espn_data.js';
+import { useTeam } from '../utils/TeamContext.jsx';
+import { useMobile, contentPadding } from '../utils/useMobile.js';
 import { WAIVER_POOL, ALL_ROSTERS, LEAGUE_FETCHED_AT } from '../utils/espn_league.js';
 import { PLAYERS_BY_POSITION } from '../utils/nfl_data.js';
 import { hasWeatherImpact, getWeatherAdvisory } from '../utils/weather_data.js';
@@ -12,23 +13,7 @@ import { hasWeatherImpact, getWeatherAdvisory } from '../utils/weather_data.js';
 // Design tokens — matches LineupOptimizer / LeagueHome exactly
 // ---------------------------------------------------------------------------
 
-const C = {
-  bg:        '#1a1d23',
-  surface:   '#22262e',
-  border:    '#333a45',
-  borderMid: '#3d4652',
-  text:      '#f0ede6',
-  textMid:   '#a8b0bc',
-  textDim:   '#6a7585',
-  accent:    '#c8ff00',
-  accentDim: '#5a7000',
-  red:       '#ff6b6b',
-  amber:     '#ffb84d',
-  green:     '#5ddd8a',
-};
-
-const font  = '"DM Mono", "Fira Mono", "Consolas", monospace';
-const serif = '"DM Serif Display", "Georgia", serif';
+import { C, font, serif } from '../utils/theme.js';
 
 // ---------------------------------------------------------------------------
 // Severity helpers
@@ -319,9 +304,13 @@ function InjuryCard({ player, myRoster, waiverPool }) {
 // ---------------------------------------------------------------------------
 
 export default function InjuryDashboard() {
-  const myRoster   = MY_ROSTER   ?? [];
+  const { teamData } = useTeam();
+  const { isMobile, isNarrow } = useMobile();
+  const pad = contentPadding(isMobile, isNarrow);
+  const myRoster   = teamData?.myRoster ?? [];
+  const MY_TEAM    = teamData?.myTeam   ?? null;
   const waiverPool = WAIVER_POOL ?? [];
-  const fetchedAt  = FETCHED_AT  ?? LEAGUE_FETCHED_AT;
+  const fetchedAt  = LEAGUE_FETCHED_AT;
   const age        = fetchAge(fetchedAt);
 
   const injured = useMemo(() => buildInjuredRoster(myRoster), [myRoster]);
@@ -379,7 +368,7 @@ export default function InjuryDashboard() {
           </span>
         </header>
 
-        <div style={{ maxWidth: '860px', margin: '0 auto', padding: '32px 40px 100px' }}>
+        <div style={{ maxWidth: '860px', margin: '0 auto', padding: `32px ${pad} 100px` }}>
 
           {/* Summary bar */}
           <div style={{
@@ -398,7 +387,7 @@ export default function InjuryDashboard() {
               { label: 'Total flagged',    count: injured.length,  color: injured.length > 0  ? C.amber : C.green },
             ].map(({ label, count, color }) => (
               <div key={label} style={{ flex: 1, textAlign: 'center' }}>
-                <div style={{ fontSize: '22px', fontFamily: serif, color, marginBottom: '4px' }}>
+                <div style={{ fontSize: '32px', fontFamily: serif, color, marginBottom: '4px' }}>
                   {count}
                 </div>
                 <div style={{ fontSize: '9px', letterSpacing: '0.14em', textTransform: 'uppercase', color: C.textDim }}>

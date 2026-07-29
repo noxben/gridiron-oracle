@@ -12,29 +12,14 @@ import {
   LEAGUE_WEEK,
   LEAGUE_FETCHED_AT,
 } from '../utils/espn_league.js';
-import { MY_TEAM } from '../utils/espn_data.js';
+import { useTeam } from '../utils/TeamContext.jsx';
+import { useMobile, contentPadding } from '../utils/useMobile.js';
 
 // ---------------------------------------------------------------------------
 // Design tokens — matches LineupOptimizer exactly
 // ---------------------------------------------------------------------------
 
-const C = {
-  bg:        '#1a1d23',
-  surface:   '#22262e',
-  border:    '#333a45',
-  borderMid: '#3d4652',
-  text:      '#f0ede6',
-  textMid:   '#a8b0bc',
-  textDim:   '#6a7585',
-  accent:    '#c8ff00',
-  accentDim: '#5a7000',
-  red:       '#ff6b6b',
-  amber:     '#ffb84d',
-  green:     '#5ddd8a',
-};
-
-const font  = '"DM Mono", "Fira Mono", "Consolas", monospace';
-const serif = '"DM Serif Display", "Georgia", serif';
+import { C, font, serif } from '../utils/theme.js';
 
 // ---------------------------------------------------------------------------
 // Power rankings — algorithm-based per spec §3.1
@@ -77,8 +62,8 @@ function recordStr(t) {
   return ties > 0 ? `${t.wins}-${t.losses}-${ties}` : `${t.wins}-${t.losses}`;
 }
 
-function isMyTeam(teamId) {
-  return MY_TEAM && String(teamId) === String(MY_TEAM.team_id);
+function isMyTeam(teamId, myTeamId) {
+  return myTeamId && String(teamId) === String(myTeamId);
 }
 
 function shortName(name) {
@@ -113,7 +98,7 @@ function SectionHeader({ label, right }) {
       marginBottom:   '10px',
     }}>
       <div style={{
-        fontSize:      '9px',
+        fontSize:      '10px',
         letterSpacing: '0.18em',
         textTransform: 'uppercase',
         color:         C.textDim,
@@ -131,7 +116,7 @@ function SectionHeader({ label, right }) {
 // Standings table
 // ---------------------------------------------------------------------------
 
-function StandingsTable({ standings, powerRankedTeams }) {
+function StandingsTable({ standings, powerRankedTeams, myTeamId }) {
   // Build a lookup: team_id → power rank
   const powerRankMap = {};
   powerRankedTeams.forEach(t => { powerRankMap[t.team_id] = t.powerRank; });
@@ -142,7 +127,7 @@ function StandingsTable({ standings, powerRankedTeams }) {
         <tr style={{ borderBottom: `1px solid ${C.borderMid}` }}>
           {['#', 'Team', 'W-L', 'PF', 'PA', 'PWR'].map((h, i) => (
             <th key={h} style={{
-              fontSize:      '9px',
+              fontSize:      '10px',
               letterSpacing: '0.14em',
               textTransform: 'uppercase',
               color:         C.textDim,
@@ -157,7 +142,7 @@ function StandingsTable({ standings, powerRankedTeams }) {
       </thead>
       <tbody>
         {standings.map((team, i) => {
-          const mine = isMyTeam(team.team_id);
+          const mine = isMyTeam(team.team_id, myTeamId);
           const pwr  = powerRankMap[team.team_id];
           const pwrDelta = team.seed - pwr; // positive = ranked higher by power than by record
 
@@ -184,7 +169,7 @@ function StandingsTable({ standings, powerRankedTeams }) {
                 {mine && (
                   <span style={{
                     marginLeft:    '8px',
-                    fontSize:      '8px',
+                    fontSize:      '10px',
                     color:         C.accentDim,
                     letterSpacing: '0.12em',
                     textTransform: 'uppercase',
@@ -215,7 +200,7 @@ function StandingsTable({ standings, powerRankedTeams }) {
                 {pwrDelta !== 0 && (
                   <span style={{
                     marginLeft: '4px',
-                    fontSize:   '9px',
+                    fontSize:   '10px',
                     color:      pwrDelta > 0 ? C.red : C.green,
                   }}>
                     {pwrDelta > 0 ? `▼${pwrDelta}` : `▲${Math.abs(pwrDelta)}`}
@@ -234,7 +219,7 @@ function StandingsTable({ standings, powerRankedTeams }) {
 // Matchup card
 // ---------------------------------------------------------------------------
 
-function MatchupCard({ matchup, teams }) {
+function MatchupCard({ matchup, teams, myTeamId }) {
   const teamMap = {};
   teams.forEach(t => { teamMap[t.team_id] = t; });
 
@@ -242,8 +227,8 @@ function MatchupCard({ matchup, teams }) {
   const away = teamMap[matchup.away_team_id];
   if (!home || !away) return null;
 
-  const myHome = isMyTeam(matchup.home_team_id);
-  const myAway = isMyTeam(matchup.away_team_id);
+  const myHome = isMyTeam(matchup.home_team_id, myTeamId);
+  const myAway = isMyTeam(matchup.away_team_id, myTeamId);
   const involved = myHome || myAway;
 
   const homeProj = matchup.home_projected ?? 0;
@@ -262,7 +247,7 @@ function MatchupCard({ matchup, teams }) {
       {/* Teams row */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: '12px', color: isMyTeam(home.team_id) ? C.accent : C.text, fontWeight: isMyTeam(home.team_id) ? '600' : '400' }}>
+          <div style={{ fontSize: '12px', color: isMyTeam(home.team_id, myTeamId) ? C.accent : C.text, fontWeight: isMyTeam(home.team_id, myTeamId) ? '600' : '400' }}>
             {shortName(home.team_name)}
           </div>
           <div style={{ fontSize: '10px', color: C.textDim, marginTop: '2px' }}>{recordStr(home)}</div>
@@ -278,7 +263,7 @@ function MatchupCard({ matchup, teams }) {
         </div>
 
         <div style={{ flex: 1, textAlign: 'right' }}>
-          <div style={{ fontSize: '12px', color: isMyTeam(away.team_id) ? C.accent : C.text, fontWeight: isMyTeam(away.team_id) ? '600' : '400' }}>
+          <div style={{ fontSize: '12px', color: isMyTeam(away.team_id, myTeamId) ? C.accent : C.text, fontWeight: isMyTeam(away.team_id, myTeamId) ? '600' : '400' }}>
             {shortName(away.team_name)}
           </div>
           <div style={{ fontSize: '10px', color: C.textDim, marginTop: '2px' }}>{recordStr(away)}</div>
@@ -291,7 +276,7 @@ function MatchupCard({ matchup, teams }) {
           <div style={{
             height:     '100%',
             width:      `${homePct}%`,
-            background: isMyTeam(home.team_id) ? C.accent : C.textMid,
+            background: isMyTeam(home.team_id, myTeamId) ? C.accent : C.textMid,
             borderRadius: '1px',
             transition: 'width 0.6s ease',
           }} />
@@ -305,7 +290,7 @@ function MatchupCard({ matchup, teams }) {
 // Power rankings strip
 // ---------------------------------------------------------------------------
 
-function PowerRankings({ rankedTeams }) {
+function PowerRankings({ rankedTeams, myTeamId }) {
   const top3 = rankedTeams.slice(0, 3);
   const rest = rankedTeams.slice(3);
 
@@ -332,8 +317,8 @@ function PowerRankings({ rankedTeams }) {
           <div style={{ flex: 1 }}>
             <div style={{
               fontSize:   '12px',
-              color:      isMyTeam(team.team_id) ? C.accent : C.text,
-              fontWeight: isMyTeam(team.team_id) ? '600' : '400',
+              color:      isMyTeam(team.team_id, myTeamId) ? C.accent : C.text,
+              fontWeight: isMyTeam(team.team_id, myTeamId) ? '600' : '400',
             }}>
               {shortName(team.team_name)}
             </div>
@@ -369,8 +354,8 @@ function PowerRankings({ rankedTeams }) {
           </span>
           <span style={{
             fontSize:   '11px',
-            color:      isMyTeam(team.team_id) ? C.accent : C.textMid,
-            fontWeight: isMyTeam(team.team_id) ? '600' : '400',
+            color:      isMyTeam(team.team_id, myTeamId) ? C.accent : C.textMid,
+            fontWeight: isMyTeam(team.team_id, myTeamId) ? '600' : '400',
             flex:       1,
           }}>
             {shortName(team.team_name)}
@@ -452,6 +437,10 @@ function TransactionsFeed({ transactions }) {
 // ---------------------------------------------------------------------------
 
 export default function LeagueHome() {
+  const { teamData } = useTeam();
+  const { isMobile, isNarrow } = useMobile();
+  const pad = contentPadding(isMobile, isNarrow);
+  const myTeamId = teamData?.teamId ?? null;
   const [activeTab, setActiveTab] = useState('standings');
 
   const teams        = ALL_TEAMS       ?? [];
@@ -518,7 +507,7 @@ export default function LeagueHome() {
           </span>
         </header>
 
-        <div style={{ maxWidth: '860px', margin: '0 auto', padding: '32px 40px 100px' }}>
+        <div style={{ maxWidth: '860px', margin: '0 auto', padding: `32px ${pad} 100px` }}>
 
           {/* Tab bar */}
           <div style={{
@@ -564,7 +553,7 @@ export default function LeagueHome() {
                 borderRadius: '6px',
                 padding:      '0 20px',
               }}>
-                <StandingsTable standings={standings} powerRankedTeams={powerRanked} />
+                <StandingsTable standings={standings} powerRankedTeams={powerRanked} myTeamId={myTeamId} />
               </div>
               <div style={{ marginTop: '12px', fontSize: '10px', color: C.textDim, lineHeight: 1.6 }}>
                 PWR column shows power ranking (60% scoring, 40% win%). ▲ = ranked higher by power than record. ▼ = ranked lower.
@@ -585,7 +574,7 @@ export default function LeagueHome() {
                 borderRadius: '6px',
                 padding:      '0 20px',
               }}>
-                <PowerRankings rankedTeams={powerRanked} />
+                <PowerRankings rankedTeams={powerRanked} myTeamId={myTeamId} />
               </div>
               <div style={{ marginTop: '12px', fontSize: '10px', color: C.textDim, lineHeight: 1.6 }}>
                 Power ranking rewards teams scoring well regardless of record. A team with bad luck (high PA) will rank higher here than in the standings.
@@ -606,7 +595,7 @@ export default function LeagueHome() {
                 </div>
               ) : (
                 matchups.map((m, i) => (
-                  <MatchupCard key={i} matchup={m} teams={teams} />
+                  <MatchupCard key={i} matchup={m} teams={teams} myTeamId={myTeamId} />
                 ))
               )}
             </div>

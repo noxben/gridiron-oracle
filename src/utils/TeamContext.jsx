@@ -13,6 +13,7 @@ import { ESPN_TO_GSIS } from './id_mapping.js';
 // ---------------------------------------------------------------------------
 
 export const TEAM_CODES = {
+  "1618": "COMMISSIONER",   // ← add this — your master code, change to whatever 4 digits you want
   "6022": 28,  // Wild Thornberries
   "7680": 29,  // Luck of the Irish
   "4025": 14,  // Kicked in the Nooksack!

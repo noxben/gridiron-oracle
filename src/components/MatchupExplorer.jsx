@@ -1,42 +1,135 @@
 // MatchupExplorer.jsx — Gridiron Oracle
-// Head-to-head player comparison + opponent DEF analysis
-// Step 7 per spec §3.3
+// True head-to-head matchup view: your lineup vs opponent's actual lineup
+// Side-by-side by slot, player comparison panel, DEF rank grid
 
 import { useState, useMemo } from 'react';
-import { MY_ROSTER, MATCHUP, LEAGUE } from '../utils/espn_data.js';
-import { PLAYER_BY_GSIS_ID, PLAYERS_BY_POSITION } from '../utils/nfl_data.js';
-import { computeCompositeRating, projectPoints, getReplacementLevel } from '../utils/simulator.js';
+import { useTeam } from '../utils/TeamContext.jsx';
+import { useMobile, contentPadding } from '../utils/useMobile.js';
+import {
+  ESPN_LEAGUE_DATA,
+  ALL_ROSTERS,
+  ALL_TEAMS,
+} from '../utils/espn_league.js';
+import { PLAYER_BY_GSIS_ID } from '../utils/nfl_data.js';
+import { ESPN_TO_GSIS } from '../utils/id_mapping.js';
+import {
+  computeCompositeRating,
+  projectPoints,
+  getReplacementLevel,
+  getOptimalLineup,
+} from '../utils/simulator.js';
+import { hasWeatherImpact, getWeatherAdvisory } from '../utils/weather_data.js';
 
 // ---------------------------------------------------------------------------
-// Styles — same design system as LineupOptimizer
+// Design tokens
 // ---------------------------------------------------------------------------
 
-const C = {
-  bg:        '#1a1d23',
-  surface:   '#22262e',
-  border:    '#333a45',
-  borderMid: '#3d4652',
-  text:      '#f0ede6',
-  textMid:   '#a8b0bc',
-  textDim:   '#6a7585',
-  accent:    '#c8ff00',
-  accentDim: '#5a7000',
-  red:       '#ff6b6b',
-  amber:     '#ffb84d',
-  green:     '#5ddd8a',
-};
+import { C, font, serif, POS_COLOR } from '../utils/theme.js';
 
-const POS_COLOR = {
-  QB: '#5a9ff0', RB: '#50c878', WR: '#c090f0',
-  TE: '#f0b840', K: '#808080', DST: '#e06060',
-};
+// Canonical slot order for side-by-side display
+const SLOT_ORDER = ['QB', 'RB', 'RB', 'WR', 'WR', 'TE', 'FLEX', 'K', 'DST'];
 
-const font  = '"DM Mono", "Fira Mono", "Consolas", monospace';
-const serif = '"DM Serif Display", "Georgia", serif';
+// ---------------------------------------------------------------------------
+// Enrich a roster entry with nfl_data.js composite rating + projections
+// ---------------------------------------------------------------------------
 
-const POSITIONS = ['QB', 'RB', 'WR', 'TE', 'K', 'DST'];
+function enrichPlayer(p, allPlayers) {
+  const gsisId  = p.gsisId ?? ESPN_TO_GSIS[String(p.espn_id ?? '')] ?? null;
+  const nflData = gsisId ? PLAYER_BY_GSIS_ID?.[gsisId] : null;
 
-// DEF rank → label + color
+  if (!nflData) {
+    return {
+      ...p,
+      gsisId,
+      projectedPts:    p.projected_points ?? p.avg_points ?? 0,
+      compositeRating: 50,
+      vorp:            0,
+      hasNflData:      false,
+    };
+  }
+
+  const compositeRating = computeCompositeRating(nflData, allPlayers);
+  const projectedPts    = projectPoints(nflData, compositeRating, 0);
+  const replacement     = getReplacementLevel(nflData.position, 12);
+
+  return {
+    ...p,
+    ...nflData,
+    gsisId,
+    projectedPts,
+    compositeRating,
+    vorp:       projectedPts - replacement,
+    hasNflData: true,
+  };
+}
+
+function enrichRoster(rawRoster) {
+  if (!rawRoster || rawRoster.length === 0) return [];
+  const allNflPlayers = rawRoster
+    .map(p => {
+      const gsisId = p.gsisId ?? ESPN_TO_GSIS[String(p.espn_id ?? '')] ?? null;
+      return gsisId ? PLAYER_BY_GSIS_ID?.[gsisId] : null;
+    })
+    .filter(Boolean);
+  return rawRoster.map(p => enrichPlayer(p, allNflPlayers));
+}
+
+// ---------------------------------------------------------------------------
+// Build opponent roster from espn_league.js
+// Normalizes field names to match my roster shape
+// ---------------------------------------------------------------------------
+
+function buildOppRoster(oppTeamId) {
+  if (!oppTeamId) return [];
+  const raw = ALL_ROSTERS?.[String(oppTeamId)] ?? [];
+  return raw.map(p => ({
+    espn_id:          String(p.espn_id ?? ''),
+    gsisId:           ESPN_TO_GSIS[String(p.espn_id ?? '')] ?? null,
+    name:             p.name ?? 'Unknown',
+    position:         p.position ?? 'UNK',
+    team:             p.team ?? 'UNK',
+    lineup_slot:      p.lineup_slot ?? 'BENCH',
+    on_bench:         p.on_bench  ?? true,
+    on_ir:            p.on_ir     ?? false,
+    avg_points:       p.avg_points       ?? 0,
+    projected_points: p.projected_points ?? p.avg_points ?? 0,
+    play_probability: p.play_probability ?? 1.0,
+    injury_status:    p.injury_status    ?? 'ACTIVE',
+    injury_detail:    p.injury_detail    ?? '',
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Get optimal starting lineup (sorted by slot order)
+// Falls back to ESPN-set lineup if no nfl_data match
+// ---------------------------------------------------------------------------
+
+function getStartingLineup(enrichedRoster) {
+  // Use ESPN-set starters if available
+  const espnStarters = enrichedRoster.filter(p => !p.on_bench && !p.on_ir);
+  if (espnStarters.length >= 8) {
+    return sortBySlot(espnStarters);
+  }
+  // Fallback: build optimal from projected pts
+  return sortBySlot(enrichedRoster
+    .filter(p => !p.on_ir)
+    .sort((a, b) => (b.projectedPts ?? 0) - (a.projectedPts ?? 0))
+    .slice(0, 9));
+}
+
+function sortBySlot(players) {
+  const slotPriority = { QB: 0, RB: 1, WR: 2, TE: 3, FLEX: 4, K: 5, DST: 6 };
+  return [...players].sort((a, b) => {
+    const slotA = a.lineup_slot ?? a.lineupSlot ?? a.position ?? 'BENCH';
+    const slotB = b.lineup_slot ?? b.lineupSlot ?? b.position ?? 'BENCH';
+    return (slotPriority[slotA] ?? 7) - (slotPriority[slotB] ?? 7);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
 function defRankColor(rank) {
   if (!rank) return C.textDim;
   if (rank <= 5)  return C.red;
@@ -47,330 +140,314 @@ function defRankColor(rank) {
 }
 
 function defRankLabel(rank) {
-  if (!rank || rank === 16) return 'Neutral';
-  if (rank <= 5)  return `#${rank} — tough`;
-  if (rank <= 12) return `#${rank} — above avg`;
-  if (rank >= 28) return `#${rank} — exploitable`;
-  if (rank >= 22) return `#${rank} — below avg`;
+  if (!rank || rank === 16) return '—';
+  if (rank <= 5)  return `#${rank} tough`;
+  if (rank >= 28) return `#${rank} easy`;
   return `#${rank}`;
-}
-
-// ---------------------------------------------------------------------------
-// Build enriched player list from ESPN roster + nfl_data
-// ---------------------------------------------------------------------------
-
-function enrichRoster(roster) {
-  if (!roster || roster.length === 0) return [];
-  const allPlayers = roster
-    .map(p => PLAYER_BY_GSIS_ID[p.espn_id])
-    .filter(Boolean);
-
-  return roster.map(p => {
-    const nflData = PLAYER_BY_GSIS_ID[p.espn_id];
-    if (!nflData) {
-      return {
-        ...p,
-        gsisId:          p.espn_id,
-        projectedPts:    p.projected_points ?? p.avg_points ?? 0,
-        compositeRating: 50,
-        vorp:            0,
-        hasNflData:      false,
-      };
-    }
-    const compositeRating = computeCompositeRating(nflData, allPlayers);
-    const projectedPts    = projectPoints(nflData, compositeRating, 0);
-    const replacement     = getReplacementLevel(nflData.position, LEAGUE?.team_count ?? 12);
-    const vorp            = projectedPts - replacement;
-    return {
-      ...p,
-      ...nflData,
-      gsisId:          p.espn_id,
-      projectedPts,
-      compositeRating,
-      vorp,
-      hasNflData:      true,
-    };
-  });
 }
 
 // ---------------------------------------------------------------------------
 // Sub-components
 // ---------------------------------------------------------------------------
 
-function PosTab({ pos, active, onClick }) {
+function PosTag({ pos }) {
   const color = POS_COLOR[pos] ?? C.textMid;
   return (
-    <button
-      onClick={() => onClick(pos)}
-      style={{
-        background:   active ? color + '22' : 'transparent',
-        border:       `1px solid ${active ? color : C.border}`,
-        borderRadius: '4px',
-        padding:      '6px 14px',
-        color:        active ? color : C.textDim,
-        fontSize:     '10px',
-        fontWeight:   active ? '700' : '400',
-        letterSpacing:'0.12em',
-        textTransform:'uppercase',
-        cursor:       'pointer',
-        fontFamily:   font,
-        transition:   'all 0.15s',
-      }}
-    >
-      {pos}
-    </button>
+    <span style={{
+      fontSize: '8px', fontWeight: '700', letterSpacing: '0.10em',
+      background: color + '20', color, padding: '2px 5px', borderRadius: '3px',
+      minWidth: '28px', textAlign: 'center', display: 'inline-block',
+    }}>{pos}</span>
   );
 }
 
-function StatBar({ label, value, max, color, fmt }) {
-  const pct = max > 0 ? Math.min((value / max) * 100, 100) : 0;
-  const display = fmt ? fmt(value) : value?.toFixed(1) ?? '—';
+function InjuryDot({ prob }) {
+  if (!prob || prob >= 1.0) return null;
+  const color = prob === 0 ? C.red : prob <= 0.55 ? C.amber : '#d0c030';
   return (
-    <div style={{ marginBottom: '10px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-        <span style={{ fontSize: '10px', color: C.textMid }}>{label}</span>
-        <span style={{ fontSize: '11px', color: C.text }}>{display}</span>
-      </div>
-      <div style={{ height: '2px', background: C.border, borderRadius: '1px' }}>
-        <div style={{
-          height: '100%',
-          width: `${pct}%`,
-          background: color ?? C.accent,
-          borderRadius: '1px',
-          transition: 'width 0.4s ease',
-        }} />
-      </div>
-    </div>
+    <span style={{
+      width: '5px', height: '5px', borderRadius: '50%',
+      background: color, display: 'inline-block', marginLeft: '5px',
+      flexShrink: 0, verticalAlign: 'middle',
+    }} title={`${Math.round(prob * 100)}% to play`} />
   );
 }
 
 // ---------------------------------------------------------------------------
-// Player card (detailed)
+// Side-by-side player row
 // ---------------------------------------------------------------------------
 
-function PlayerCard({ player, isSelected, onClick }) {
-  const color = POS_COLOR[player.position] ?? C.textMid;
-  const injColor = (player.play_probability ?? 1) < 1
-    ? (player.play_probability === 0 ? C.red : C.amber)
-    : null;
+function MatchupRow({ myPlayer, oppPlayer, slotLabel, onSelect, selectedId }) {
+  const myPts  = myPlayer?.projectedPts  ?? 0;
+  const oppPts = oppPlayer?.projectedPts ?? 0;
+  const myWins = myPts > oppPts;
+  const tied   = Math.abs(myPts - oppPts) < 0.5;
 
-  return (
-    <div
-      onClick={() => onClick(player)}
-      style={{
-        padding:      '12px 16px',
-        background:   isSelected ? C.surface : 'transparent',
-        border:       `1px solid ${isSelected ? color + '60' : C.border}`,
-        borderRadius: '6px',
-        cursor:       'pointer',
-        transition:   'all 0.15s',
-        marginBottom: '6px',
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{
-            fontSize: '9px', fontWeight: '700', letterSpacing: '0.10em',
-            background: color + '20', color, padding: '2px 6px', borderRadius: '3px',
-          }}>
-            {player.position}
-          </span>
-          <span style={{ fontSize: '13px', color: C.text }}>{player.name}</span>
-          {injColor && (
-            <span style={{
-              width: '6px', height: '6px', borderRadius: '50%',
-              background: injColor, display: 'inline-block', flexShrink: 0,
-            }} />
-          )}
-        </div>
-        <div style={{ textAlign: 'right' }}>
-          <div style={{ fontSize: '16px', fontFamily: serif, color: C.accent }}>
-            {player.projectedPts?.toFixed(1)}
-          </div>
-          <div style={{ fontSize: '9px', color: C.textDim }}>proj pts</div>
-        </div>
-      </div>
+  const mySelected  = selectedId && (myPlayer?.gsisId === selectedId || myPlayer?.espn_id === selectedId);
+  const oppSelected = selectedId && (oppPlayer?.gsisId === selectedId || oppPlayer?.espn_id === selectedId);
 
-      <div style={{ display: 'flex', gap: '16px', marginTop: '8px', fontSize: '10px', color: C.textDim }}>
-        <span>{player.team}</span>
-        {player.opp_def_rank && (
-          <span style={{ color: defRankColor(player.opp_def_rank) }}>
-            vs DEF {defRankLabel(player.opp_def_rank)}
-          </span>
-        )}
-        <span style={{ marginLeft: 'auto', color: (player.vorp ?? 0) >= 0 ? C.green : C.red }}>
-          VORP {(player.vorp ?? 0) >= 0 ? '+' : ''}{player.vorp?.toFixed(1)}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Comparison panel — two players side by side
-// ---------------------------------------------------------------------------
-
-function ComparisonPanel({ playerA, playerB, onClear }) {
-  if (!playerA && !playerB) return null;
-
-  const stats = [
-    { label: 'Projected pts',    keyA: 'projectedPts',    keyB: 'projectedPts',    max: 35,  fmt: v => v?.toFixed(1) ?? '—' },
-    { label: 'Composite rating', keyA: 'compositeRating', keyB: 'compositeRating', max: 100, fmt: v => v?.toFixed(0) ?? '—' },
-    { label: 'VORP',             keyA: 'vorp',            keyB: 'vorp',            max: 20,  fmt: v => v != null ? (v >= 0 ? '+' : '') + v.toFixed(1) : '—' },
-    { label: 'Season avg pts',   keyA: 'avg_points',      keyB: 'avg_points',      max: 30,  fmt: v => v?.toFixed(1) ?? '—' },
-    { label: 'EPA / play',       keyA: 'epa_per_play',    keyB: 'epa_per_play',    max: 0.5, fmt: v => v?.toFixed(3) ?? '—' },
-    { label: 'Snap %',           keyA: 'snap_pct',        keyB: 'snap_pct',        max: 1,   fmt: v => v != null ? (v * 100).toFixed(0) + '%' : '—' },
-    { label: 'Target share',     keyA: 'target_share',    keyB: 'target_share',    max: 0.4, fmt: v => v != null ? (v * 100).toFixed(0) + '%' : '—' },
-    { label: 'Carry share',      keyA: 'carry_share',     keyB: 'carry_share',     max: 0.7, fmt: v => v != null ? (v * 100).toFixed(0) + '%' : '—' },
-    { label: 'Red zone share',   keyA: 'red_zone_share',  keyB: 'red_zone_share',  max: 0.4, fmt: v => v != null ? (v * 100).toFixed(0) + '%' : '—' },
-    { label: 'Play probability', keyA: 'play_probability',keyB: 'play_probability',max: 1,   fmt: v => v != null ? (v * 100).toFixed(0) + '%' : '—' },
-  ];
-
-  const winner = (keyA, keyB) => {
-    const a = playerA?.[keyA];
-    const b = playerB?.[keyB];
-    if (a == null || b == null) return null;
-    if (a > b) return 'A';
-    if (b > a) return 'B';
-    return 'tie';
+  const rowStyle = {
+    display:      'grid',
+    gridTemplateColumns: '1fr 48px 1fr',
+    gap:          '8px',
+    padding:      '10px 0',
+    borderBottom: `1px solid ${C.border}`,
+    alignItems:   'center',
   };
 
+  const playerStyle = (isMe, player, isSelected) => ({
+    display:      'flex',
+    flexDirection: isMe ? 'row' : 'row-reverse',
+    alignItems:   'center',
+    gap:          '8px',
+    padding:      '8px 10px',
+    borderRadius: '5px',
+    cursor:       player ? 'pointer' : 'default',
+    background:   isSelected ? (isMe ? C.accent + '12' : C.red + '08') : 'transparent',
+    border:       `1px solid ${isSelected ? (isMe ? C.accentDim : C.red + '40') : 'transparent'}`,
+    transition:   'all 0.12s',
+  });
+
   return (
-    <div style={{
-      background: C.surface,
-      border:     `1px solid ${C.border}`,
-      borderRadius: '8px',
-      padding:    '24px',
-      marginTop:  '24px',
-    }}>
-      {/* Header */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 48px 1fr', gap: '12px', marginBottom: '20px', alignItems: 'center' }}>
-        <div>
-          <div style={{ fontSize: '14px', color: C.text, marginBottom: '2px' }}>
-            {playerA?.name ?? <span style={{ color: C.textDim }}>Select player A</span>}
-          </div>
-          <div style={{ fontSize: '10px', color: C.textDim }}>{playerA?.team ?? '—'}</div>
-        </div>
-        <div style={{ textAlign: 'center', fontSize: '10px', color: C.textDim, letterSpacing: '0.12em' }}>
-          VS
-        </div>
-        <div style={{ textAlign: 'right' }}>
-          <div style={{ fontSize: '14px', color: C.text, marginBottom: '2px' }}>
-            {playerB?.name ?? <span style={{ color: C.textDim }}>Select player B</span>}
-          </div>
-          <div style={{ fontSize: '10px', color: C.textDim }}>{playerB?.team ?? '—'}</div>
-        </div>
+    <div style={rowStyle}>
+      {/* My player — left side */}
+      <div
+        style={playerStyle(true, myPlayer, mySelected)}
+        onClick={() => myPlayer && onSelect(myPlayer)}
+      >
+        {myPlayer ? (
+          <>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px' }}>
+                <span style={{ fontSize: '12px', color: C.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {myPlayer.name}
+                </span>
+                <InjuryDot prob={myPlayer.play_probability} />
+                {hasWeatherImpact(myPlayer.team) && (
+                  <span title={getWeatherAdvisory(myPlayer.team).join(' · ')} style={{ fontSize: '9px' }}>🌬</span>
+                )}
+              </div>
+              <div style={{ fontSize: '9px', color: C.textDim }}>
+                {myPlayer.team}
+                {myPlayer.opp_def_rank && (
+                  <span style={{ marginLeft: '6px', color: defRankColor(myPlayer.opp_def_rank) }}>
+                    vs {defRankLabel(myPlayer.opp_def_rank)}
+                  </span>
+                )}
+              </div>
+            </div>
+            <div style={{ textAlign: 'right', flexShrink: 0 }}>
+              <div style={{ fontSize: '16px', fontFamily: serif, color: (!tied && myWins) ? C.accent : C.textMid }}>
+                {myPts.toFixed(1)}
+              </div>
+              {myPlayer.vorp != null && (
+                <div style={{ fontSize: '9px', color: myPlayer.vorp >= 0 ? C.green : C.red }}>
+                  {myPlayer.vorp >= 0 ? '+' : ''}{myPlayer.vorp.toFixed(1)}
+                </div>
+              )}
+            </div>
+          </>
+        ) : (
+          <span style={{ fontSize: '11px', color: C.textDim, fontStyle: 'italic' }}>—</span>
+        )}
       </div>
 
-      {/* Stat rows */}
-      {stats.map(({ label, keyA, keyB, max, fmt }) => {
-        const valA = playerA?.[keyA];
-        const valB = playerB?.[keyB];
-        const w    = winner(keyA, keyB);
-        const pctA = max > 0 && valA != null ? Math.min(Math.max(valA / max, 0), 1) * 100 : 0;
-        const pctB = max > 0 && valB != null ? Math.min(Math.max(valB / max, 0), 1) * 100 : 0;
-
-        return (
-          <div key={label} style={{ marginBottom: '12px' }}>
-            <div style={{ fontSize: '9px', color: C.textDim, letterSpacing: '0.12em', textTransform: 'uppercase', textAlign: 'center', marginBottom: '4px' }}>
-              {label}
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px 1fr', gap: '8px', alignItems: 'center' }}>
-              {/* Bar A (fills right to left) */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'flex-end' }}>
-                <span style={{ fontSize: '11px', color: w === 'A' ? C.accent : C.textMid, fontWeight: w === 'A' ? '700' : '400' }}>
-                  {fmt(valA)}
-                </span>
-                <div style={{ width: '80px', height: '3px', background: C.border, borderRadius: '2px', overflow: 'hidden', direction: 'rtl' }}>
-                  <div style={{ height: '100%', width: `${pctA}%`, background: w === 'A' ? C.accent : C.borderMid, borderRadius: '2px', transition: 'width 0.4s' }} />
-                </div>
-              </div>
-              {/* Center label */}
-              <div style={{ textAlign: 'center' }}>
-                {w === 'tie' && <span style={{ fontSize: '9px', color: C.textDim }}>tie</span>}
-              </div>
-              {/* Bar B */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <div style={{ width: '80px', height: '3px', background: C.border, borderRadius: '2px', overflow: 'hidden' }}>
-                  <div style={{ height: '100%', width: `${pctB}%`, background: w === 'B' ? C.accent : C.borderMid, borderRadius: '2px', transition: 'width 0.4s' }} />
-                </div>
-                <span style={{ fontSize: '11px', color: w === 'B' ? C.accent : C.textMid, fontWeight: w === 'B' ? '700' : '400' }}>
-                  {fmt(valB)}
-                </span>
-              </div>
-            </div>
+      {/* Slot label — center */}
+      <div style={{ textAlign: 'center' }}>
+        <PosTag pos={slotLabel} />
+        {!tied && (
+          <div style={{ fontSize: '8px', color: myWins ? C.accent : C.red, marginTop: '4px' }}>
+            {myWins ? '◀' : '▶'}
           </div>
-        );
-      })}
+        )}
+      </div>
 
-      <button
-        onClick={onClear}
-        style={{
-          marginTop: '16px', background: 'transparent', border: `1px solid ${C.border}`,
-          borderRadius: '4px', padding: '8px 16px', color: C.textDim,
-          fontSize: '10px', letterSpacing: '0.12em', textTransform: 'uppercase',
-          cursor: 'pointer', fontFamily: font,
-        }}
+      {/* Opp player — right side */}
+      <div
+        style={playerStyle(false, oppPlayer, oppSelected)}
+        onClick={() => oppPlayer && onSelect(oppPlayer)}
       >
-        Clear comparison
-      </button>
+        {oppPlayer ? (
+          <>
+            <div style={{ textAlign: 'left', flexShrink: 0 }}>
+              <div style={{ fontSize: '16px', fontFamily: serif, color: (!tied && !myWins) ? C.red : C.textMid }}>
+                {oppPts.toFixed(1)}
+              </div>
+              {oppPlayer.vorp != null && (
+                <div style={{ fontSize: '9px', color: oppPlayer.vorp >= 0 ? C.green : C.red }}>
+                  {oppPlayer.vorp >= 0 ? '+' : ''}{oppPlayer.vorp.toFixed(1)}
+                </div>
+              )}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px', justifyContent: 'flex-end' }}>
+                {hasWeatherImpact(oppPlayer.team) && (
+                  <span title={getWeatherAdvisory(oppPlayer.team).join(' · ')} style={{ fontSize: '9px' }}>🌬</span>
+                )}
+                <InjuryDot prob={oppPlayer.play_probability} />
+                <span style={{ fontSize: '12px', color: C.textMid, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {oppPlayer.name}
+                </span>
+              </div>
+              <div style={{ fontSize: '9px', color: C.textDim, textAlign: 'right' }}>
+                {oppPlayer.team}
+                {oppPlayer.opp_def_rank && (
+                  <span style={{ marginLeft: '6px', color: defRankColor(oppPlayer.opp_def_rank) }}>
+                    vs {defRankLabel(oppPlayer.opp_def_rank)}
+                  </span>
+                )}
+              </div>
+            </div>
+          </>
+        ) : (
+          <span style={{ fontSize: '11px', color: C.textDim, fontStyle: 'italic' }}>—</span>
+        )}
+      </div>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// DEF rank table for this week's opponent
+// Player detail panel — shown when a player is selected
 // ---------------------------------------------------------------------------
 
-function DefRankTable({ players }) {
-  const byPosition = useMemo(() => {
-    const map = {};
-    for (const p of players) {
-      if (!p.opp_def_rank || !p.position) continue;
-      if (!map[p.position]) map[p.position] = [];
-      map[p.position].push(p);
-    }
-    return map;
-  }, [players]);
+function PlayerDetailPanel({ player, side, onClose }) {
+  if (!player) return null;
+  const color = side === 'me' ? C.accent : C.red;
 
-  const positions = Object.keys(byPosition).filter(pos => POSITIONS.includes(pos));
-  if (positions.length === 0) return null;
+  const stats = [
+    { label: 'Projected pts',    val: player.projectedPts,    fmt: v => v?.toFixed(1) },
+    { label: 'Composite rating', val: player.compositeRating, fmt: v => v?.toFixed(0) },
+    { label: 'Season avg pts',   val: player.season_avg_pts ?? player.avg_points, fmt: v => v?.toFixed(1) },
+    { label: 'EPA / play',       val: player.epa_per_play,    fmt: v => v?.toFixed(3) },
+    { label: 'Snap %',           val: player.snap_pct,        fmt: v => v != null ? (v * 100).toFixed(0) + '%' : null },
+    { label: 'Target share',     val: player.target_share,    fmt: v => v != null ? (v * 100).toFixed(0) + '%' : null },
+    { label: 'Carry share',      val: player.carry_share,     fmt: v => v != null ? (v * 100).toFixed(0) + '%' : null },
+    { label: 'Red zone share',   val: player.red_zone_share,  fmt: v => v != null ? (v * 100).toFixed(0) + '%' : null },
+  ].filter(s => s.val != null && s.fmt(s.val) != null);
 
   return (
     <div style={{
-      background: C.surface,
-      border:     `1px solid ${C.border}`,
-      borderRadius: '8px',
-      padding:    '20px 24px',
-      marginTop:  '24px',
+      padding:      '20px',
+      background:   C.surface,
+      border:       `1px solid ${color}40`,
+      borderRadius: '6px',
+      marginTop:    '16px',
+      animation:    'fadeIn 0.2s ease',
     }}>
-      <div style={{ fontSize: '9px', letterSpacing: '0.18em', textTransform: 'uppercase', color: C.textDim, marginBottom: '16px' }}>
-        Opponent DEF rank this week
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+            <PosTag pos={player.position} />
+            <span style={{ fontSize: '15px', color: C.text }}>{player.name}</span>
+            <InjuryDot prob={player.play_probability} />
+          </div>
+          <div style={{ fontSize: '10px', color: C.textDim }}>
+            {player.team}
+            {player.opp_def_rank && (
+              <span style={{ marginLeft: '8px', color: defRankColor(player.opp_def_rank) }}>
+                vs DEF {defRankLabel(player.opp_def_rank)}
+              </span>
+            )}
+            {player.injury_detail && player.injury_detail !== 'ACTIVE' && (
+              <span style={{ marginLeft: '8px', color: C.amber }}>⚠ {player.injury_detail}</span>
+            )}
+          </div>
+        </div>
+        <button
+          onClick={onClose}
+          style={{ background: 'none', border: 'none', color: C.textDim, cursor: 'pointer', fontSize: '14px', padding: '0' }}
+        >
+          ✕
+        </button>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '16px' }}>
-        {positions.map(pos => {
-          const posPlayers = byPosition[pos];
-          const rank = posPlayers[0]?.opp_def_rank;
-          const color = defRankColor(rank);
-          return (
-            <div key={pos} style={{ padding: '12px', background: C.bg, borderRadius: '6px', border: `1px solid ${C.border}` }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '6px' }}>
-                <span style={{ fontSize: '10px', color: POS_COLOR[pos] ?? C.textMid, fontWeight: '700', letterSpacing: '0.10em' }}>
-                  {pos}
-                </span>
-                <span style={{ fontSize: '18px', fontFamily: serif, color }}>
-                  #{rank ?? '—'}
-                </span>
-              </div>
-              <div style={{ fontSize: '10px', color, marginBottom: '8px' }}>
-                {defRankLabel(rank)}
-              </div>
-              <div style={{ fontSize: '10px', color: C.textDim }}>
-                {posPlayers.map(p => p.name).join(', ')}
-              </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+        {stats.map(({ label, val, fmt }) => (
+          <div key={label} style={{
+            padding:      '8px 10px',
+            background:   C.bg,
+            borderRadius: '4px',
+            border:       `1px solid ${C.border}`,
+          }}>
+            <div style={{ fontSize: '9px', color: C.textDim, marginBottom: '3px', letterSpacing: '0.10em', textTransform: 'uppercase' }}>
+              {label}
             </div>
-          );
-        })}
+            <div style={{ fontSize: '14px', fontFamily: serif, color }}>
+              {fmt(val)}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {hasWeatherImpact(player.team) && (
+        <div style={{ marginTop: '12px', fontSize: '10px', color: C.amber, padding: '8px 10px', background: C.amber + '10', borderRadius: '4px' }}>
+          🌬 {getWeatherAdvisory(player.team).join(' · ')}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Projected totals summary bar
+// ---------------------------------------------------------------------------
+
+function MatchupSummary({ myStarters, oppStarters, myTeamName, oppTeamName }) {
+  const myTotal  = myStarters.reduce((s, p) => s + (p.projectedPts ?? 0), 0);
+  const oppTotal = oppStarters.reduce((s, p) => s + (p.projectedPts ?? 0), 0);
+  const total    = myTotal + oppTotal || 1;
+  const myPct    = (myTotal / total) * 100;
+
+  const myAdvantage  = myStarters.filter((p, i) => (p.projectedPts ?? 0) > (oppStarters[i]?.projectedPts ?? 0)).length;
+  const oppAdvantage = oppStarters.filter((p, i) => (p.projectedPts ?? 0) > (myStarters[i]?.projectedPts ?? 0)).length;
+
+  return (
+    <div style={{
+      padding:      '20px 24px',
+      background:   C.surface,
+      border:       `1px solid ${C.border}`,
+      borderRadius: '6px',
+      marginBottom: '24px',
+    }}>
+      {/* Team names + totals */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px 1fr', gap: '8px', alignItems: 'center', marginBottom: '16px' }}>
+        <div>
+          <div style={{ fontSize: '11px', color: C.textDim, letterSpacing: '0.10em', textTransform: 'uppercase', marginBottom: '4px' }}>
+            {myTeamName}
+          </div>
+          <div style={{ fontSize: '28px', fontFamily: serif, color: myTotal >= oppTotal ? C.accent : C.textMid }}>
+            {myTotal.toFixed(1)}
+          </div>
+          <div style={{ fontSize: '10px', color: C.textDim, marginTop: '2px' }}>
+            {myAdvantage}/{myStarters.length} slot wins
+          </div>
+        </div>
+        <div style={{ textAlign: 'center', fontSize: '11px', color: C.textDim, letterSpacing: '0.10em' }}>
+          proj
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          <div style={{ fontSize: '11px', color: C.textDim, letterSpacing: '0.10em', textTransform: 'uppercase', marginBottom: '4px' }}>
+            {oppTeamName}
+          </div>
+          <div style={{ fontSize: '28px', fontFamily: serif, color: oppTotal > myTotal ? C.red : C.textMid }}>
+            {oppTotal.toFixed(1)}
+          </div>
+          <div style={{ fontSize: '10px', color: C.textDim, marginTop: '2px' }}>
+            {oppAdvantage}/{oppStarters.length} slot wins
+          </div>
+        </div>
+      </div>
+
+      {/* Score bar */}
+      <div style={{ height: '4px', background: C.border, borderRadius: '2px', overflow: 'hidden' }}>
+        <div style={{
+          height:     '100%',
+          width:      `${myPct}%`,
+          background: myTotal >= oppTotal ? C.accent : C.red,
+          borderRadius: '2px',
+          transition: 'width 0.6s ease',
+        }} />
       </div>
     </div>
   );
@@ -381,43 +458,76 @@ function DefRankTable({ players }) {
 // ---------------------------------------------------------------------------
 
 export default function MatchupExplorer({ onBack }) {
-  const [activePos,  setActivePos]  = useState('WR');
-  const [selectedA,  setSelectedA]  = useState(null);
-  const [selectedB,  setSelectedB]  = useState(null);
+  const { teamData } = useTeam();
+  const { isMobile, isNarrow } = useMobile();
+  const [selectedPlayer, setSelectedPlayer] = useState(null);
+  const [selectedSide,   setSelectedSide]   = useState(null);
+  const [showOppBench,   setShowOppBench]   = useState(false);
 
-  const enriched = useMemo(() => enrichRoster(MY_ROSTER ?? []), []);
+  const pad = contentPadding(isMobile, isNarrow);
 
-  const filtered = useMemo(() =>
-    enriched
-      .filter(p => p.position === activePos)
-      .sort((a, b) => (b.projectedPts ?? 0) - (a.projectedPts ?? 0)),
-    [enriched, activePos]
+  const myRoster  = teamData?.myRoster  ?? [];
+  const matchup   = teamData?.matchup   ?? null;
+  const myTeam    = teamData?.myTeam    ?? null;
+
+  const oppTeamId   = matchup?.opp_team_id ?? null;
+  const oppTeamName = matchup?.opp_team_name ?? 'Opponent';
+  const oppTeam     = (ALL_TEAMS ?? []).find(t => t.team_id === oppTeamId);
+
+  // Enrich my roster
+  const myEnriched = useMemo(() => enrichRoster(myRoster), [myRoster]);
+
+  // Build + enrich opponent roster
+  const oppEnriched = useMemo(() => {
+    const raw = buildOppRoster(oppTeamId);
+    return enrichRoster(raw);
+  }, [oppTeamId]);
+
+  // Get starters for each side
+  const myStarters  = useMemo(() => getStartingLineup(myEnriched),  [myEnriched]);
+  const oppStarters = useMemo(() => getStartingLineup(oppEnriched), [oppEnriched]);
+  const oppBench    = useMemo(() =>
+    oppEnriched.filter(p => p.on_bench && !p.on_ir),
+    [oppEnriched]
   );
 
-  const handleSelect = (player) => {
-    if (!selectedA || (selectedA?.gsisId === player.gsisId)) {
-      setSelectedA(player);
-    } else if (!selectedB || (selectedB?.gsisId === player.gsisId)) {
-      setSelectedB(player);
+  const handleSelect = (player, side) => {
+    if (selectedPlayer?.gsisId === player.gsisId && selectedPlayer?.espn_id === player.espn_id) {
+      setSelectedPlayer(null);
+      setSelectedSide(null);
     } else {
-      // Replace A, shift B to A
-      setSelectedA(selectedB);
-      setSelectedB(player);
+      setSelectedPlayer(player);
+      setSelectedSide(side);
     }
   };
 
-  const handleClear = () => {
-    setSelectedA(null);
-    setSelectedB(null);
-  };
+  // No matchup guard
+  if (!matchup) {
+    return (
+      <div style={{ minHeight: '100vh', background: C.bg, color: C.text, fontFamily: font }}>
+        <header style={{ borderBottom: `1px solid ${C.border}`, padding: '20px 40px', display: 'flex', alignItems: 'center', gap: '20px' }}>
+          <button onClick={onBack} style={{ background: 'none', border: 'none', color: C.textDim, cursor: 'pointer', fontSize: '11px', fontFamily: font }}>← back</button>
+          <span style={{ color: C.border }}>|</span>
+          <span style={{ fontSize: '11px', letterSpacing: '0.18em', textTransform: 'uppercase', color: C.accent }}>Gridiron Oracle</span>
+          <span style={{ fontSize: '11px', color: C.textDim }}>Matchup Explorer</span>
+        </header>
+        <div style={{ maxWidth: '860px', margin: '80px auto', padding: '0 40px', textAlign: 'center' }}>
+          <div style={{ fontSize: '13px', color: C.textDim, marginBottom: '8px' }}>No matchup data for this week.</div>
+          <div style={{ fontSize: '11px', color: C.textDim }}>
+            Run <code style={{ color: C.accent }}>python3 scripts/fetch_espn_league.py</code> to refresh.
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Serif+Display&display=swap');
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { background: ${C.bg}; }
-        button:hover { opacity: 0.85; }
       `}</style>
 
       <div style={{ minHeight: '100vh', background: C.bg, color: C.text, fontFamily: font }}>
@@ -425,18 +535,14 @@ export default function MatchupExplorer({ onBack }) {
         {/* Header */}
         <header style={{
           borderBottom: `1px solid ${C.border}`,
-          padding: '20px 40px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '20px',
+          padding:      '20px 40px',
+          display:      'flex',
+          alignItems:   'center',
+          gap:          '20px',
         }}>
           <button
             onClick={onBack}
-            style={{
-              background: 'none', border: 'none', color: C.textDim,
-              cursor: 'pointer', fontSize: '11px', letterSpacing: '0.12em',
-              fontFamily: font, padding: '0',
-            }}
+            style={{ background: 'none', border: 'none', color: C.textDim, cursor: 'pointer', fontSize: '11px', letterSpacing: '0.12em', fontFamily: font, padding: '0' }}
           >
             ← back
           </button>
@@ -444,65 +550,134 @@ export default function MatchupExplorer({ onBack }) {
           <span style={{ fontSize: '11px', letterSpacing: '0.18em', textTransform: 'uppercase', color: C.accent }}>
             Gridiron Oracle
           </span>
-          <span style={{ fontSize: '11px', color: C.textDim }}>
+          <span style={{ fontSize: '11px', color: C.textDim, letterSpacing: '0.10em' }}>
             Matchup Explorer
           </span>
-          {MATCHUP && (
-            <span style={{ marginLeft: 'auto', fontSize: '11px', color: C.textDim }}>
-              Week {MATCHUP.week} · vs {MATCHUP.opp_team_name}
-            </span>
-          )}
+          <span style={{ marginLeft: 'auto', fontSize: '11px', color: C.textDim }}>
+            Week {matchup.week} · vs {oppTeamName}
+          </span>
         </header>
 
-        <div style={{ maxWidth: '860px', margin: '0 auto', padding: '40px' }}>
+        <div style={{ maxWidth: '900px', margin: '0 auto', padding: `28px ${pad} 100px` }}>
 
-          {/* Instruction */}
-          <div style={{ fontSize: '12px', color: C.textMid, marginBottom: '24px', lineHeight: 1.6 }}>
-            Select two players to compare head-to-head. Filter by position below.
-          </div>
-
-          {/* Position tabs */}
-          <div style={{ display: 'flex', gap: '8px', marginBottom: '24px', flexWrap: 'wrap' }}>
-            {POSITIONS.map(pos => (
-              <PosTab
-                key={pos}
-                pos={pos}
-                active={activePos === pos}
-                onClick={setActivePos}
-              />
-            ))}
-          </div>
-
-          {/* Player list */}
-          <div>
-            {filtered.length === 0 ? (
-              <div style={{ fontSize: '12px', color: C.textDim, padding: '20px 0' }}>
-                No {activePos} players on your roster.
-              </div>
-            ) : (
-              filtered.map(player => (
-                <PlayerCard
-                  key={player.gsisId}
-                  player={player}
-                  isSelected={
-                    selectedA?.gsisId === player.gsisId ||
-                    selectedB?.gsisId === player.gsisId
-                  }
-                  onClick={handleSelect}
-                />
-              ))
-            )}
-          </div>
-
-          {/* Comparison panel */}
-          <ComparisonPanel
-            playerA={selectedA}
-            playerB={selectedB}
-            onClear={handleClear}
+          {/* Summary bar */}
+          <MatchupSummary
+            myStarters={myStarters}
+            oppStarters={oppStarters}
+            myTeamName={isMobile ? (myTeam?.team_name?.split(' ')[0] ?? 'Me') : (myTeam?.team_name ?? 'My Team')}
+            oppTeamName={isMobile ? (oppTeamName?.split(' ')[0] ?? 'Opp') : oppTeamName}
           />
 
-          {/* DEF rank table */}
-          <DefRankTable players={enriched} />
+          {/* Column headers */}
+          <div style={{
+            display:             'grid',
+            gridTemplateColumns: '1fr 48px 1fr',
+            gap:                 '8px',
+            marginBottom:        '8px',
+          }}>
+            <div style={{ fontSize: '9px', letterSpacing: '0.16em', textTransform: 'uppercase', color: C.accent }}>
+              {myTeam?.team_name ?? 'My Team'}
+            </div>
+            <div />
+            <div style={{ fontSize: '9px', letterSpacing: '0.16em', textTransform: 'uppercase', color: C.textDim, textAlign: 'right' }}>
+              {oppTeamName}
+            </div>
+          </div>
+
+          {/* Sub-header row */}
+          <div style={{
+            display:             'grid',
+            gridTemplateColumns: '1fr 48px 1fr',
+            gap:                 '8px',
+            marginBottom:        '4px',
+            paddingBottom:       '8px',
+            borderBottom:        `1px solid ${C.borderMid}`,
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', paddingRight: '10px' }}>
+              <span style={{ fontSize: '9px', color: C.textDim, letterSpacing: '0.10em', textTransform: 'uppercase' }}>Player</span>
+              <span style={{ fontSize: '9px', color: C.textDim, letterSpacing: '0.10em', textTransform: 'uppercase' }}>Proj / VORP</span>
+            </div>
+            <div />
+            <div style={{ display: 'flex', justifyContent: 'space-between', paddingLeft: '10px' }}>
+              <span style={{ fontSize: '9px', color: C.textDim, letterSpacing: '0.10em', textTransform: 'uppercase' }}>Proj / VORP</span>
+              <span style={{ fontSize: '9px', color: C.textDim, letterSpacing: '0.10em', textTransform: 'uppercase' }}>Player</span>
+            </div>
+          </div>
+
+          {/* Side-by-side rows */}
+          {myStarters.map((myP, i) => {
+            const oppP     = oppStarters[i] ?? null;
+            const slotLabel = myP.lineup_slot ?? myP.lineupSlot ?? myP.position ?? 'FLEX';
+            const selId    = selectedPlayer?.gsisId ?? selectedPlayer?.espn_id;
+            return (
+              <MatchupRow
+                key={i}
+                myPlayer={myP}
+                oppPlayer={oppP}
+                slotLabel={slotLabel}
+                selectedId={selId}
+                onSelect={(p) => {
+                  const side = (p.gsisId && p.gsisId === myP?.gsisId) || p.espn_id === myP?.espn_id ? 'me' : 'opp';
+                  handleSelect(p, side);
+                }}
+              />
+            );
+          })}
+
+          {/* Player detail panel */}
+          {selectedPlayer && (
+            <PlayerDetailPanel
+              player={selectedPlayer}
+              side={selectedSide}
+              onClose={() => { setSelectedPlayer(null); setSelectedSide(null); }}
+            />
+          )}
+
+          {/* Opponent bench toggle */}
+          {oppBench.length > 0 && (
+            <div style={{ marginTop: '24px' }}>
+              <button
+                onClick={() => setShowOppBench(v => !v)}
+                style={{
+                  background:    'transparent',
+                  border:        `1px solid ${C.border}`,
+                  borderRadius:  '4px',
+                  color:         C.textDim,
+                  fontSize:      '10px',
+                  letterSpacing: '0.12em',
+                  textTransform: 'uppercase',
+                  cursor:        'pointer',
+                  fontFamily:    font,
+                  padding:       '7px 14px',
+                }}
+              >
+                {showOppBench ? 'Hide' : 'Show'} opponent bench ({oppBench.length})
+              </button>
+
+              {showOppBench && (
+                <div style={{ marginTop: '12px', animation: 'fadeIn 0.2s ease' }}>
+                  <div style={{ fontSize: '9px', letterSpacing: '0.16em', textTransform: 'uppercase', color: C.textDim, marginBottom: '10px' }}>
+                    {oppTeamName} bench
+                  </div>
+                  {oppBench.map((p, i) => (
+                    <div key={p.espn_id ?? i} style={{
+                      display:      'flex',
+                      alignItems:   'center',
+                      gap:          '10px',
+                      padding:      '8px 0',
+                      borderBottom: `1px solid ${C.border}`,
+                      opacity:      0.6,
+                    }}>
+                      <PosTag pos={p.position} />
+                      <span style={{ fontSize: '12px', color: C.textMid, flex: 1 }}>{p.name}</span>
+                      <InjuryDot prob={p.play_probability} />
+                      <span style={{ fontSize: '11px', color: C.textDim }}>{(p.projectedPts ?? 0).toFixed(1)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
         </div>
       </div>

@@ -7,19 +7,7 @@ import { useState, useRef, useEffect } from 'react';
 import { TEAM_CODES } from '../utils/TeamContext.jsx';
 import { ALL_TEAMS } from '../utils/espn_league.js';
 
-const C = {
-  bg:      '#0a0c0f',
-  surface: '#0f1318',
-  border:  '#1e2328',
-  text:    '#e8e6e0',
-  textMid: '#5a6270',
-  textDim: '#3a4048',
-  accent:  '#c8ff00',
-  red:     '#e06060',
-};
-
-const font  = '"DM Mono", "Fira Mono", "Consolas", monospace';
-const serif = '"DM Serif Display", "Georgia", serif';
+import { C, font, serif } from '../utils/theme.js';
 
 export default function PasscodeEntry({ onSuccess }) {
   const [digits,  setDigits]  = useState(['', '', '', '']);
@@ -84,6 +72,13 @@ export default function PasscodeEntry({ onSuccess }) {
       setTimeout(() => inputRefs[0].current?.focus(), 50);
       return;
     }
+
+	  // Commissioner master code — bypass to league home
+	  if (teamId === 'COMMISSIONER') {
+		setSuccess(true);
+		setTimeout(() => onSuccess('COMMISSIONER'), 800);
+		return;
+	  }
 
     // Success
     const team = (ALL_TEAMS ?? []).find(t => t.team_id === teamId);

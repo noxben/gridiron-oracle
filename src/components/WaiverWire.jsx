@@ -3,7 +3,8 @@
 // v2.0 Step 7 per spec §4.3 / §6
 
 import { useState, useMemo } from 'react';
-import { MY_ROSTER, MY_TEAM, LEAGUE } from '../utils/espn_data.js';
+import { useTeam } from '../utils/TeamContext.jsx';
+import { useMobile, contentPadding } from '../utils/useMobile.js';
 import {
   WAIVER_POOL,
   FAAB_BUDGETS,
@@ -18,28 +19,7 @@ import { hasWeatherImpact, getWeatherAdvisory } from '../utils/weather_data.js';
 // Design tokens
 // ---------------------------------------------------------------------------
 
-const C = {
-  bg:        '#1a1d23',
-  surface:   '#22262e',
-  border:    '#333a45',
-  borderMid: '#3d4652',
-  text:      '#f0ede6',
-  textMid:   '#a8b0bc',
-  textDim:   '#6a7585',
-  accent:    '#c8ff00',
-  accentDim: '#5a7000',
-  red:       '#ff6b6b',
-  amber:     '#ffb84d',
-  green:     '#5ddd8a',
-};
-
-const font  = '"DM Mono", "Fira Mono", "Consolas", monospace';
-const serif = '"DM Serif Display", "Georgia", serif';
-
-const POS_COLOR = {
-  QB: '#5a9ff0', RB: '#50c878', WR: '#c090f0',
-  TE: '#f0b840', K: '#808080', DST: '#e06060',
-};
+import { C, font, serif, POS_COLOR } from '../utils/theme.js';
 
 const POSITIONS = ['ALL', 'QB', 'RB', 'WR', 'TE', 'K', 'DST'];
 
@@ -393,10 +373,14 @@ function WaiverRow({ player, rank, dropCandidate, faabBid, myRoster }) {
 // ---------------------------------------------------------------------------
 
 export default function WaiverWire() {
+  const { teamData } = useTeam();
+  const { isMobile, isNarrow } = useMobile();
+  const pad = contentPadding(isMobile, isNarrow);
   const [posFilter,  setPosFilter]  = useState('ALL');
   const [sortBy,     setSortBy]     = useState('vorp'); // 'vorp' | 'pts' | 'owned'
 
-  const myRoster   = MY_ROSTER   ?? [];
+  const myRoster   = teamData?.myRoster ?? [];
+  const MY_TEAM    = teamData?.myTeam   ?? null;
   const waiverPool = WAIVER_POOL ?? [];
   const fetchedAt  = LEAGUE_FETCHED_AT;
   const age        = fetchAge(fetchedAt);
@@ -519,7 +503,7 @@ export default function WaiverWire() {
           </span>
         </header>
 
-        <div style={{ maxWidth: '860px', margin: '0 auto', padding: '28px 40px 100px' }}>
+        <div style={{ maxWidth: '860px', margin: '0 auto', padding: `28px ${pad} 100px` }}>
 
           {/* Controls */}
           <div style={{ display: 'flex', gap: '12px', marginBottom: '20px', alignItems: 'center', flexWrap: 'wrap' }}>

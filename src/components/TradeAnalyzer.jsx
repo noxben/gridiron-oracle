@@ -3,7 +3,8 @@
 // v2.0 Step 8 per spec §4.3 / §7
 
 import { useState, useMemo, useCallback } from 'react';
-import { MY_ROSTER, MY_TEAM, MATCHUP, LEAGUE } from '../utils/espn_data.js';
+import { useTeam } from '../utils/TeamContext.jsx';
+import { useMobile, contentPadding } from '../utils/useMobile.js';
 import {
   ESPN_LEAGUE_DATA,
   ALL_ROSTERS,
@@ -25,28 +26,7 @@ import {
 // Design tokens
 // ---------------------------------------------------------------------------
 
-const C = {
-  bg:        '#1a1d23',
-  surface:   '#22262e',
-  border:    '#333a45',
-  borderMid: '#3d4652',
-  text:      '#f0ede6',
-  textMid:   '#a8b0bc',
-  textDim:   '#6a7585',
-  accent:    '#c8ff00',
-  accentDim: '#5a7000',
-  red:       '#ff6b6b',
-  amber:     '#ffb84d',
-  green:     '#5ddd8a',
-};
-
-const font  = '"DM Mono", "Fira Mono", "Consolas", monospace';
-const serif = '"DM Serif Display", "Georgia", serif';
-
-const POS_COLOR = {
-  QB: '#5a9ff0', RB: '#50c878', WR: '#c090f0',
-  TE: '#f0b840', K: '#808080', DST: '#e06060',
-};
+import { C, font, serif, POS_COLOR } from '../utils/theme.js';
 
 // ---------------------------------------------------------------------------
 // Trade fairness rating — per spec §7.2
@@ -356,26 +336,31 @@ function PlayerPicker({ label, color, players, selected, onToggle }) {
 // ---------------------------------------------------------------------------
 
 export default function TradeAnalyzer() {
+  const { teamData } = useTeam();
+  const { isMobile, isNarrow } = useMobile();
+  const pad = contentPadding(isMobile, isNarrow);
   // Trade selection state
-  const [givingIds,    setGivingIds]    = useState(new Map()); // espnId → player
-  const [receivingIds, setReceivingIds] = useState(new Map()); // espnId → player
-  const [tradePartner, setTradePartner] = useState('');        // team_id string
+  const [givingIds,    setGivingIds]    = useState(new Map());
+  const [receivingIds, setReceivingIds] = useState(new Map());
+  const [tradePartner, setTradePartner] = useState('');
 
   // Simulation results
-  const [simResult,   setSimResult]   = useState(null);   // { before, after }
-  const [rosResult,   setROSResult]   = useState(null);   // { before, after }
+  const [simResult,   setSimResult]   = useState(null);
+  const [rosResult,   setROSResult]   = useState(null);
   const [fairness,    setFairness]    = useState(null);
-  const [simStatus,   setSimStatus]   = useState('idle'); // 'idle' | 'running' | 'done' | 'error'
+  const [simStatus,   setSimStatus]   = useState('idle');
 
-  const myRoster    = MY_ROSTER ?? [];
-  const leagueSize  = LEAGUE?.team_count ?? 12;
+  const myRoster    = teamData?.myRoster ?? [];
+  const MY_TEAM     = teamData?.myTeam   ?? null;
+  const MATCHUP     = teamData?.matchup  ?? null;
+  const leagueSize  = 12;
   const fetchedAt   = LEAGUE_FETCHED_AT;
   const age         = fetchAge(fetchedAt);
 
   // All teams except mine for partner picker
   const otherTeams = useMemo(() =>
     (ESPN_LEAGUE_DATA?.teams ?? []).filter(t => String(t.team_id) !== String(MY_TEAM?.team_id)),
-    []
+    [MY_TEAM?.team_id]
   );
 
   // Partner's roster
@@ -538,7 +523,7 @@ export default function TradeAnalyzer() {
           </span>
         </header>
 
-        <div style={{ maxWidth: '900px', margin: '0 auto', padding: '28px 40px 100px' }}>
+        <div style={{ maxWidth: '900px', margin: '0 auto', padding: `28px ${pad} 100px` }}>
 
           {/* Trade partner picker */}
           <div style={{ marginBottom: '24px' }}>
@@ -569,8 +554,13 @@ export default function TradeAnalyzer() {
             </div>
           </div>
 
-          {/* Roster pickers */}
-          <div style={{ display: 'flex', gap: '20px', marginBottom: '24px' }}>
+          {/* Roster pickers — side by side on desktop, stacked on mobile */}
+          <div style={{
+            display:       'flex',
+            flexDirection: isMobile ? 'column' : 'row',
+            gap:           '20px',
+            marginBottom:  '24px',
+          }}>
             <PlayerPicker
               label={`You give (${givingPlayers.length} selected)`}
               color={C.red}
@@ -582,10 +572,12 @@ export default function TradeAnalyzer() {
               onToggle={toggleGiving}
             />
 
-            {/* Arrow */}
-            <div style={{ display: 'flex', alignItems: 'center', paddingTop: '32px', flexShrink: 0 }}>
-              <span style={{ fontSize: '20px', color: C.borderMid }}>⇄</span>
-            </div>
+            {/* Arrow — hidden on mobile since pickers stack vertically */}
+            {!isMobile && (
+              <div style={{ display: 'flex', alignItems: 'center', paddingTop: '32px', flexShrink: 0 }}>
+                <span style={{ fontSize: '20px', color: C.borderMid }}>⇄</span>
+              </div>
+            )}
 
             <PlayerPicker
               label={tradePartner

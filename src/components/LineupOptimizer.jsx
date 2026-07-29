@@ -3,7 +3,8 @@
 // Step 6 per spec §7.2
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { MY_ROSTER, MY_TEAM, MATCHUP, LEAGUE } from '../utils/espn_data.js';
+import { useTeam } from '../utils/TeamContext.jsx';
+import { useMobile, contentPadding } from '../utils/useMobile.js';
 import { ESPN_LEAGUE_DATA } from '../utils/espn_league.js';
 import { ESPN_TO_GSIS } from '../utils/id_mapping.js';
 import {
@@ -21,28 +22,8 @@ import { hasWeatherImpact, getWeatherAdvisory } from '../utils/weather_data.js';
 // but never cluttered. Every number earns its place.
 // ---------------------------------------------------------------------------
 
-const C = {
-  bg:        '#1a1d23',
-  surface:   '#22262e',
-  border:    '#333a45',
-  borderMid: '#3d4652',
-  text:      '#f0ede6',
-  textMid:   '#a8b0bc',
-  textDim:   '#6a7585',
-  accent:    '#c8ff00',
-  accentDim: '#5a7000',
-  red:       '#ff6b6b',
-  amber:     '#ffb84d',
-  green:     '#5ddd8a',
-};
+import { C, font, serif, POS_COLOR } from '../utils/theme.js';
 
-const POS_COLOR = {
-  QB:  '#5a9ff0', RB: '#50c878', WR: '#c090f0',
-  TE:  '#f0b840', K:  '#808080', DST: '#e06060', FLEX: '#c090f0',
-};
-
-const font  = '"DM Mono", "Fira Mono", "Consolas", monospace';
-const serif = '"DM Serif Display", "Georgia", serif';
 
 // ---------------------------------------------------------------------------
 // Utility
@@ -119,7 +100,7 @@ function ScoreDist({ dist, label, color }) {
       <div style={{ fontSize: '9px', letterSpacing: '0.16em', color: C.textDim, textTransform: 'uppercase', marginBottom: '10px' }}>
         {label}
       </div>
-      <div style={{ fontSize: '28px', fontFamily: serif, color, marginBottom: '4px' }}>
+      <div style={{ fontSize: '32px', fontFamily: serif, color, marginBottom: '4px' }}>
         {dist.p50?.toFixed(1)}
       </div>
       <div style={{ display: 'flex', gap: '12px', fontSize: '11px', color: C.textMid }}>
@@ -156,7 +137,7 @@ function WinGauge({ pct }) {
         display: 'flex', flexDirection: 'column',
         alignItems: 'center', justifyContent: 'center',
       }}>
-        <div style={{ fontSize: '22px', fontFamily: serif, color, lineHeight: 1 }}>
+        <div style={{ fontSize: '28px', fontFamily: serif, color, lineHeight: 1 }}>
           {pct?.toFixed(0)}%
         </div>
         <div style={{ fontSize: '9px', letterSpacing: '0.14em', color: C.textDim, textTransform: 'uppercase', marginTop: '2px' }}>
@@ -379,133 +360,32 @@ function PlayerRow({ player, override, onOverride, rank, isVarianceKing }) {
 }
 
 // ---------------------------------------------------------------------------
-// Bench row — expandable, same detail as starter row but dimmed
+// Bench row (condensed)
 // ---------------------------------------------------------------------------
 
-function BenchRow({ player, override, onOverride }) {
-  const [expanded, setExpanded] = useState(false);
-
-  const projColor = C.textDim; // always dimmed for bench
-
+function BenchRow({ player }) {
   return (
-    <>
-      <tr
-        onClick={() => setExpanded(e => !e)}
-        style={{
-          borderBottom: `1px solid ${C.border}`,
-          cursor:       'pointer',
-          opacity:      0.65,
-          background:   expanded ? C.surface : 'transparent',
-          transition:   'background 0.15s',
-        }}
-      >
-        {/* Rank placeholder */}
-        <td style={{ padding: '10px 0', width: '24px' }}>
-          <span style={{ fontSize: '9px', color: C.textDim }}>—</span>
-        </td>
-
-        {/* Player name + pos */}
-        <td style={{ padding: '10px 8px 10px 0' }}>
-          <div style={{ display: 'flex', alignItems: 'center' }}>
-            <PosTag pos={player.position} />
-            <span style={{ fontSize: '12px', color: C.textMid }}>{player.name}</span>
-            <InjuryDot prob={player.play_probability ?? 1} />
-            {hasWeatherImpact(player.team) && (
-              <span
-                title={getWeatherAdvisory(player.team).join(' · ')}
-                style={{ marginLeft: '6px', fontSize: '10px', cursor: 'help' }}
-              >🌬</span>
-            )}
-          </div>
-          <div style={{ fontSize: '10px', color: C.textDim, marginTop: '2px', paddingLeft: '36px' }}>
-            {player.team}
-          </div>
-        </td>
-
-        {/* Slot */}
-        <td style={{ padding: '10px 12px 10px 0', width: '44px' }}>
-          <span style={{ fontSize: '9px', color: C.textDim, letterSpacing: '0.10em' }}>BENCH</span>
-        </td>
-
-        {/* Projected pts */}
-        <td style={{ padding: '10px 0', width: '52px', textAlign: 'right' }}>
-          <span style={{ fontSize: '13px', fontFamily: serif, color: projColor }}>
-            {player.projectedPts?.toFixed(1)}
-          </span>
-        </td>
-
-        {/* VORP — empty for bench */}
-        <td style={{ padding: '10px 0 10px 12px', width: '48px' }} />
-
-        {/* Override indicator */}
-        <td style={{ padding: '10px 0 10px 12px', width: '32px', textAlign: 'right' }}>
-          {(override ?? 0) !== 0 && (
-            <span style={{ fontSize: '9px', color: override > 0 ? C.accent : C.red, fontWeight: '700' }}>
-              {override > 0 ? `+${override}` : override}
-            </span>
-          )}
-        </td>
-      </tr>
-
-      {/* Expanded detail — same layout as PlayerRow */}
-      {expanded && (
-        <tr style={{ background: C.surface, opacity: 0.85 }}>
-          <td colSpan={6} style={{ padding: '0 0 16px 32px' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', paddingTop: '12px' }}>
-
-              {/* Rating breakdown */}
-              <div>
-                <div style={{ fontSize: '9px', letterSpacing: '0.14em', color: C.textDim, textTransform: 'uppercase', marginBottom: '10px' }}>
-                  Rating breakdown
-                </div>
-                {[
-                  { label: 'EPA / play', val: player.scores?.epa },
-                  { label: 'Usage',      val: player.scores?.usage },
-                  { label: 'Snap %',     val: player.scores?.snap },
-                  { label: 'Red zone',   val: player.scores?.redZone },
-                ].map(({ label, val }) => (
-                  <div key={label} style={{ marginBottom: '7px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '3px' }}>
-                      <span style={{ fontSize: '10px', color: C.textMid }}>{label}</span>
-                      <span style={{ fontSize: '10px', color: C.text }}>{val?.toFixed(0) ?? '—'}</span>
-                    </div>
-                    <ProgressBar value={val ?? 0} max={100} color={C.textMid} />
-                  </div>
-                ))}
-                <div style={{ marginTop: '10px', display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ fontSize: '10px', color: C.textMid }}>Composite</span>
-                  <span style={{ fontSize: '12px', color: C.textMid, fontWeight: '600' }}>
-                    {player.compositeRating?.toFixed(0) ?? '—'}
-                  </span>
-                </div>
-              </div>
-
-              {/* Override */}
-              <div>
-                <div style={{ fontSize: '9px', letterSpacing: '0.14em', color: C.textDim, textTransform: 'uppercase', marginBottom: '10px' }}>
-                  Eye-test override
-                </div>
-                <div style={{ fontSize: '11px', color: C.textMid, marginBottom: '8px', lineHeight: 1.5 }}>
-                  {(override ?? 0) === 0
-                    ? 'Trusting the model'
-                    : override > 0
-                      ? `+${override} → ~+${(override / 100 * 3).toFixed(1)} pts projected`
-                      : `${override} → ~${(override / 100 * 3).toFixed(1)} pts projected`
-                  }
-                </div>
-                <OverrideSlider value={override ?? 0} onChange={onOverride} />
-
-                {player.injuryDetail && (
-                  <div style={{ marginTop: '12px', fontSize: '10px', color: C.amber, letterSpacing: '0.08em' }}>
-                    ⚠ {player.injuryDetail} ({Math.round((player.play_probability ?? 1) * 100)}% to play)
-                  </div>
-                )}
-              </div>
-            </div>
-          </td>
-        </tr>
-      )}
-    </>
+    <tr style={{ borderBottom: `1px solid ${C.border}`, opacity: 0.55 }}>
+      <td style={{ padding: '8px 0', width: '24px' }}>
+        <span style={{ fontSize: '9px', color: C.textDim }}>—</span>
+      </td>
+      <td style={{ padding: '8px 8px 8px 0' }}>
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <PosTag pos={player.position} />
+          <span style={{ fontSize: '12px', color: C.textMid }}>{player.name}</span>
+          <InjuryDot prob={player.play_probability ?? 1} />
+        </div>
+      </td>
+      <td style={{ padding: '8px 12px 8px 0' }}>
+        <span style={{ fontSize: '9px', color: C.textDim }}>BENCH</span>
+      </td>
+      <td style={{ padding: '8px 0', textAlign: 'right' }}>
+        <span style={{ fontSize: '12px', color: C.textDim }}>
+          {player.projectedPts?.toFixed(1)}
+        </span>
+      </td>
+      <td colSpan={2} />
+    </tr>
   );
 }
 
@@ -546,21 +426,27 @@ function SimStatus({ status, progress, elapsedMs }) {
 // ---------------------------------------------------------------------------
 
 export default function LineupOptimizer() {
-  const [result,      setResult]      = useState(null);
-  const [simStatus,   setSimStatus]   = useState('idle');
-  const [progress,    setProgress]    = useState(0);
-  const [overrides,   setOverrides]   = useState({});
-  const [lineup,      setLineup]      = useState([]);
-  const [bench,       setBench]       = useState([]);
-  const [lineupMode,  setLineupMode]  = useState('espn'); // 'espn' | 'optimal'
+  const { teamData } = useTeam();
+  const { isMobile, isNarrow } = useMobile();
+  const pad = contentPadding(isMobile, isNarrow);
+  const MY_ROSTER = teamData?.myRoster ?? [];
+  const MY_TEAM   = teamData?.myTeam   ?? null;
+  const MATCHUP   = teamData?.matchup  ?? null;
+  const LEAGUE    = { team_count: 12 };
+
+  const [result,    setResult]    = useState(null);
+  const [simStatus, setSimStatus] = useState('idle');
+  const [progress,  setProgress]  = useState(0);
+  const [overrides, setOverrides] = useState({});
+  const [lineup,    setLineup]    = useState([]);
+  const [bench,     setBench]     = useState([]);
   const debounceRef = useRef(null);
 
   const leagueSize  = LEAGUE?.team_count ?? 12;
   const matchup     = MATCHUP;
 
-  // Build initial lineup on mount
+  // Build initial lineup on mount / when team changes
   useEffect(() => {
-  console.log('MY_ROSTER:', MY_ROSTER?.map(p => `${p.name} | on_bench:${p.on_bench} | slot:${p.lineup_slot}`));
   if (!MY_ROSTER || MY_ROSTER.length === 0) return;
 
   const starters = MY_ROSTER
@@ -591,7 +477,7 @@ export default function LineupOptimizer() {
   setLineup(starters);
   setBench(benchPlayers);
   runFallbackSim(starters);
-}, []);
+}, [MY_ROSTER?.length, teamData?.teamId]);
 
   // Fallback: build lineup from ESPN data alone (before nfl_data.js is populated)
   const buildFallbackLineup = useCallback(() => {
@@ -749,66 +635,6 @@ export default function LineupOptimizer() {
     }, 600);
   }, [overrides, lineup, runSim]);
 
-  // Lineup mode toggle — switch between ESPN set lineup and algorithm optimal
-  const handleModeSwitch = useCallback((mode) => {
-    if (mode === lineupMode) return;
-    setLineupMode(mode);
-
-    if (!MY_ROSTER || MY_ROSTER.length === 0) return;
-
-    if (mode === 'optimal') {
-      // Build full roster for getOptimalLineup — needs gsisId on every player
-      const fullRoster = MY_ROSTER.map(p => ({
-        ...p,
-        gsisId:          p.espn_id,
-        projectedPts:    p.projected_points ?? p.avg_points ?? 0,
-        play_probability: p.play_probability ?? 1.0,
-        lineupSlot:      p.lineup_slot,
-        onBench:         p.on_bench ?? false,
-        onIR:            p.on_ir    ?? false,
-      }));
-      const optimalStarters = getOptimalLineup(fullRoster, overrides, leagueSize);
-      const optimalIds      = new Set(optimalStarters.map(p => p.gsisId));
-      const newBench        = fullRoster
-        .filter(p => !optimalIds.has(p.gsisId) && !p.onIR)
-        .map(p => ({
-          ...p,
-          projectedPts: p.projected_points ?? p.avg_points ?? 0,
-        }));
-      setLineup(optimalStarters);
-      setBench(newBench);
-      runSim(optimalStarters, overrides);
-    } else {
-      // Restore ESPN set lineup
-      const starters = MY_ROSTER
-        .filter(p => !p.on_bench && !p.on_ir)
-        .map(p => ({
-          ...p,
-          gsisId:          p.espn_id,
-          projectedPts:    p.projected_points ?? p.avg_points ?? 0,
-          play_probability: p.play_probability ?? 1.0,
-          lineupSlot:      p.lineup_slot,
-          compositeRating: 50,
-          vorp:            0,
-          varianceMult:    1.0,
-          varianceProfile: 'standard',
-          scores:          { epa: 50, usage: 50, snap: 50, redZone: 50 },
-          opp_def_rank:    16,
-        }));
-      const benchPlayers = MY_ROSTER
-        .filter(p => p.on_bench || p.on_ir)
-        .map(p => ({
-          ...p,
-          gsisId:       p.espn_id,
-          projectedPts: p.projected_points ?? p.avg_points ?? 0,
-          play_probability: p.play_probability ?? 1.0,
-        }));
-      setLineup(starters);
-      setBench(benchPlayers);
-      runSim(starters, overrides);
-    }
-  }, [lineupMode, overrides, leagueSize, runSim]);
-
   // Highest-variance player
   const varianceKingId = result?.highestVariancePlayer?.gsisId;
 
@@ -855,7 +681,7 @@ export default function LineupOptimizer() {
           )}
         </header>
 
-        <div style={{ maxWidth: '860px', margin: '0 auto', padding: '40px 40px' }}>
+        <div style={{ maxWidth: '860px', margin: '0 auto', padding: `40px ${pad}` }}>
 
           {/* Win probability + score distribution */}
           <div style={{
@@ -903,47 +729,10 @@ export default function LineupOptimizer() {
             </div>
           </div>
 
-          {/* Lineup table header + mode toggle */}
-          <div style={{ marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <div style={{ fontSize: '9px', letterSpacing: '0.18em', textTransform: 'uppercase', color: C.textDim }}>
-                Starting lineup
-              </div>
-              {/* ESPN vs Optimal toggle */}
-              <div style={{
-                display:      'flex',
-                gap:          '2px',
-                background:   C.bg,
-                border:       `1px solid ${C.border}`,
-                borderRadius: '5px',
-                padding:      '2px',
-              }}>
-                {[
-                  { key: 'espn',    label: 'ESPN set' },
-                  { key: 'optimal', label: 'Optimal' },
-                ].map(({ key, label }) => (
-                  <button
-                    key={key}
-                    onClick={() => handleModeSwitch(key)}
-                    style={{
-                      background:    lineupMode === key ? C.accent : 'transparent',
-                      color:         lineupMode === key ? '#0a0c0f' : C.textDim,
-                      border:        'none',
-                      borderRadius:  '3px',
-                      padding:       '4px 10px',
-                      fontSize:      '9px',
-                      fontWeight:    lineupMode === key ? '700' : '400',
-                      letterSpacing: '0.10em',
-                      textTransform: 'uppercase',
-                      cursor:        'pointer',
-                      fontFamily:    font,
-                      transition:    'all 0.15s',
-                    }}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
+          {/* Lineup table */}
+          <div style={{ marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+            <div style={{ fontSize: '9px', letterSpacing: '0.18em', textTransform: 'uppercase', color: C.textDim }}>
+              Starting lineup
             </div>
             <div style={{ fontSize: '10px', color: C.textDim }}>
               Click a player to expand · drag slider to override
@@ -989,10 +778,8 @@ export default function LineupOptimizer() {
                 <tbody>
                   {bench.map((player, i) => (
                     <BenchRow
-                      key={player.gsisId ?? player.espn_id ?? i}
+                      key={player.espn_id ?? i}
                       player={player}
-                      override={overrides[player.gsisId ?? player.espn_id] ?? 0}
-                      onOverride={(val) => handleOverride(player.gsisId ?? player.espn_id, val)}
                     />
                   ))}
                 </tbody>
