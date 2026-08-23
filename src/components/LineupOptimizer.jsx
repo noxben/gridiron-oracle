@@ -453,7 +453,6 @@ export default function LineupOptimizer() {
     .filter(p => !p.on_bench && !p.on_ir)
     .map(p => ({
       ...p,
-      gsisId:          p.espn_id,
       projectedPts:    p.projected_points ?? p.avg_points ?? 0,
       play_probability: p.play_probability ?? 1.0,
       compositeRating: 50,
@@ -469,7 +468,7 @@ export default function LineupOptimizer() {
     .filter(p => p.on_bench || p.on_ir)
     .map(p => ({
       ...p,
-      gsisId:          p.espn_id,
+      gsisId:          p.gsisId, // changed from p.espn_id to p.gsisId
       projectedPts:    p.projected_points ?? p.avg_points ?? 0,
       play_probability: p.play_probability ?? 1.0,
     }));
@@ -487,7 +486,6 @@ export default function LineupOptimizer() {
     const starters  = MY_ROSTER
       .filter(p => !p.on_bench && !p.on_ir)
       .map(p => ({
-        gsisId:          p.espn_id,
         espn_id:         p.espn_id,
         name:            p.name,
         position:        p.position,
@@ -509,7 +507,7 @@ export default function LineupOptimizer() {
       .filter(p => p.on_bench || p.on_ir)
       .map(p => ({
         ...p,
-        gsisId:          p.espn_id,
+        gsisId:          p.gsisId, // changed from p.espn_id to p.gsisId
         projectedPts:    p.projected_points ?? p.avg_points ?? 0,
         play_probability: p.play_probability ?? 1.0,
       }));
@@ -552,6 +550,7 @@ export default function LineupOptimizer() {
           { leagueSize, onProgress: setProgress },
         );
         setResult(simResult);
+        setLineup(sortBySlot(simResult.myPlayers));   // ← NEW LINE
         setSimStatus('done');
         return;
       }
@@ -574,6 +573,7 @@ export default function LineupOptimizer() {
         onProgress: setProgress,
       });
       setResult(simResult);
+      setLineup(sortBySlot(simResult.myPlayers));   // ← NEW LINE
       setSimStatus('done');
     } catch (err) {
       console.error('Simulation failed:', err);
@@ -605,6 +605,7 @@ export default function LineupOptimizer() {
           { leagueSize, onProgress: setProgress },
         );
         setResult(simResult);
+        setLineup(sortBySlot(simResult.myPlayers));   // ← NEW LINE
         setSimStatus('done');
         return;
       }
@@ -617,6 +618,7 @@ export default function LineupOptimizer() {
         onProgress: setProgress,
       });
       setResult(simResult);
+      setLineup(sortBySlot(simResult.myPlayers));   // ← NEW LINE
       setSimStatus('done');
     } catch (err) {
       console.error('Fallback sim failed:', err);
@@ -827,7 +829,7 @@ const thStyle = {
   fontSize: '9px',
   letterSpacing: '0.16em',
   textTransform: 'uppercase',
-  color: '#6a7585',   // was #2e3540
+  color: C.textDim,   // now theme-driven — matches theme.js textDim   // was #6a7585
   textAlign: 'left',
   padding: '8px 0',
   fontWeight: '400',
@@ -839,6 +841,12 @@ const thStyle = {
  * Distributes a projected total across positions using historical weights.
  * v2.0: this should rarely fire — simulateMatchup uses the real roster instead.
  */
+ function sortBySlot(players) {
+  const slotOrder = ['QB', 'RB', 'WR', 'TE', 'FLEX', 'K', 'DST'];
+  return [...players].sort(
+    (a, b) => slotOrder.indexOf(a.lineupSlot) - slotOrder.indexOf(b.lineupSlot)
+  );
+}
 function buildSyntheticOpponent(totalProjected) {
   const positions = ['QB', 'RB', 'RB', 'WR', 'WR', 'TE', 'FLEX', 'K', 'DST'];
   const weights   = [0.18, 0.12, 0.10, 0.12, 0.11, 0.09, 0.10, 0.05, 0.08];

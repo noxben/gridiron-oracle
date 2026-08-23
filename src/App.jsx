@@ -11,6 +11,7 @@ import LeagueHome       from './components/LeagueHome.jsx';
 import InjuryDashboard  from './components/InjuryDashboard.jsx';
 import WaiverWire       from './components/WaiverWire.jsx';
 import TradeAnalyzer    from './components/TradeAnalyzer.jsx';
+import DraftBoard       from './components/DraftBoard.jsx';
 import { C, font } from './utils/theme.js';
 
 const VIEWS = {
@@ -20,10 +21,9 @@ const VIEWS = {
   WAIVER:  'waiver',
   TRADE:   'trade',
   INJURY:  'injury',
+  DRAFT:   'draft',     // ← NEW
 };
 
-
-// Nav labels — shorter on mobile
 const NAV_ITEMS = [
   { key: VIEWS.LEAGUE,  label: 'League',  short: 'Lgue' },
   { key: VIEWS.LINEUP,  label: 'Lineup',  short: 'Lnup' },
@@ -31,6 +31,7 @@ const NAV_ITEMS = [
   { key: VIEWS.WAIVER,  label: 'Waiver',  short: 'Wvr'  },
   { key: VIEWS.TRADE,   label: 'Trade',   short: 'Trd'  },
   { key: VIEWS.INJURY,  label: 'Injury',  short: 'Inj'  },
+  { key: VIEWS.DRAFT,   label: 'Draft',   short: 'Drft' },   // ← NEW
 ];
 
 function Nav({ view, setView, onLogout }) {
@@ -115,6 +116,7 @@ function AppInner({ isCommissioner = false }) {
       {view === VIEWS.WAIVER  && <WaiverWire />}
       {view === VIEWS.TRADE   && <TradeAnalyzer />}
       {view === VIEWS.INJURY  && <InjuryDashboard />}
+      {view === VIEWS.DRAFT   && <DraftBoard />}          {/* ← NEW */}
       <Nav view={view} setView={setView} onLogout={logout} />
     </>
   );

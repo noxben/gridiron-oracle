@@ -93,31 +93,31 @@ const STARTERS_BY_LEAGUE_SIZE = {
  * @returns {number} 0–100
  */
 export function computeCompositeRating(player, allPlayers) {
+  const safeNum = (v) => (typeof v === 'number' && !Number.isNaN(v)) ? v : 0;
+
   const pos     = player.position ?? 'WR';
   const weights = WEIGHTS[pos] ?? WEIGHTS['WR'];
   const peers   = allPlayers.filter(p => p.position === pos);
-
   const normalize = (val, field) => {
-    const vals   = peers.map(p => p[field] ?? 0).filter(v => !isNaN(v));
-    const min    = Math.min(...vals);
-    const max    = Math.max(...vals);
+    const vals = peers.map(p => safeNum(p[field])).filter(v => !Number.isNaN(v));
+    const min  = Math.min(...vals);
+    const max  = Math.max(...vals);
     if (max === min) return 50;
     return ((val - min) / (max - min)) * 100;
   };
+  const epaScore     = normalize(safeNum(player.epa_per_play),  'epa_per_play');
+  const snapScore    = normalize(safeNum(player.snap_pct),      'snap_pct');
+  const redZoneScore = normalize(safeNum(player.red_zone_share),'red_zone_share');
 
-  const epaScore     = normalize(player.epa_per_play    ?? 0, 'epa_per_play');
-  const snapScore    = normalize(player.snap_pct         ?? 0, 'snap_pct');
-  const redZoneScore = normalize(player.red_zone_share   ?? 0, 'red_zone_share');
-
-  // Usage score is position-specific
   let usageScore;
   if (pos === 'RB') {
-    usageScore = normalize(player.carry_share  ?? 0, 'carry_share');
+    usageScore = normalize(safeNum(player.carry_share), 'carry_share');
   } else if (pos === 'QB') {
-    usageScore = epaScore; // QB efficiency IS usage
+    usageScore = epaScore;
   } else {
-    usageScore = normalize(player.target_share ?? 0, 'target_share');
+    usageScore = normalize(safeNum(player.target_share), 'target_share');
   }
+  // ...rest unchanged
 
   const raw = (
     weights.epa     * epaScore     +
@@ -128,11 +128,10 @@ export function computeCompositeRating(player, allPlayers) {
 
   // Apply system adjustment
   const sysAdj = getSystemAdjustment(player);
-
   // Apply opponent DEF rank adjustment
   const defAdj = DEF_RANK_ADJ[player.opp_def_rank ?? 16] ?? 0;
-
-  return Math.max(0, Math.min(100, raw + sysAdj + defAdj));
+  const rating = Math.max(0, Math.min(100, raw + sysAdj + defAdj));
+  return { rating, epaScore, usageScore, snapScore, redZoneScore };   // ← NEW
 }
 
 /**
@@ -428,6 +427,7 @@ export function prepareLineup(espnRoster, overrides = {}, leagueSize = 12) {
     .filter(p => !p.onBench && !p.onIR)   // starters only
     .map(rosterEntry => {
       const playerData = PLAYER_BY_GSIS_ID[rosterEntry.gsisId];
+      console.log('[prepareLineup]', rosterEntry.name, 'gsisId:', rosterEntry.gsisId, 'found:', !!playerData);
       if (!playerData) {
         // Unknown player — use ESPN's projected points as fallback
         return {
@@ -443,9 +443,10 @@ export function prepareLineup(espnRoster, overrides = {}, leagueSize = 12) {
         };
       }
 
-      const override        = overrides[rosterEntry.gsisId] ?? 0;
-      const compositeRating = computeCompositeRating(playerData, allPlayers);
-      const projectedPts    = projectPoints(playerData, compositeRating, override);
+      const override = overrides[rosterEntry.gsisId] ?? 0;
+      const { rating: compositeRating, epaScore, usageScore, snapScore, redZoneScore } =
+        computeCompositeRating(playerData, allPlayers);
+      const projectedPts = projectPoints(playerData, compositeRating, override);
       const varianceMult    = getVarianceMultiplier(playerData);
       const vorp            = computeVORP(playerData, projectedPts, leagueSize);
 
@@ -454,6 +455,10 @@ export function prepareLineup(espnRoster, overrides = {}, leagueSize = 12) {
         gsisId:          rosterEntry.gsisId,
         lineupSlot:      rosterEntry.lineupSlot,
         compositeRating,
+        epa_score:       epaScore,        // ← NEW
+        usage_score:     usageScore,      // ← NEW
+        snap_score:      snapScore,       // ← NEW
+        red_zone_score:  redZoneScore,    // ← NEW
         projectedPts,
         varianceMult,
         vorp,
@@ -627,6 +632,7 @@ function buildScoreDist(scores) {
 function buildPlayerResult(player, teamScores, oppTeamScores) {
   return {
     gsisId:          player.gsisId,
+    lineupSlot:      player.lineupSlot,   // ← add this line
     name:            player.name,
     position:        player.position,
     team:            player.team,
@@ -723,8 +729,8 @@ export function getOptimalLineup(fullRoster, overrides = {}, leagueSize = 12) {
     const playerData = PLAYER_BY_GSIS_ID[rosterEntry.gsisId];
     if (!playerData) return { ...rosterEntry, projectedPts: rosterEntry.projectedPts ?? 0, vorp: 0 };
     const override        = overrides[rosterEntry.gsisId] ?? 0;
-    const compositeRating = computeCompositeRating(playerData, allPlayers);
-    const projectedPts    = projectPoints(playerData, compositeRating, override);
+    const { rating: compositeRating } = computeCompositeRating(playerData, allPlayers);
+    const projectedPts = projectPoints(playerData, compositeRating, override);
     const vorp            = computeVORP(playerData, projectedPts, leagueSize);
     // Injury-adjust projected points for ranking
     const adjProjected    = projectedPts * (playerData.play_probability ?? 1.0);

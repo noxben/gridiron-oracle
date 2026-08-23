@@ -8,7 +8,7 @@ export const C = {
   borderMid: '#3d4652',
   text:      '#f0ede6',
   textMid:   '#a8b0bc',
-  textDim:   '#6a7585',
+  textDim:   '#8a9aaa',
   accent:    '#c8ff00',
   accentDim: '#5a7000',
   red:       '#ff6b6b',
