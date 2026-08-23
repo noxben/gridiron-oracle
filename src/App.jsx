@@ -1,7 +1,7 @@
 // App.jsx — Gridiron Oracle
 // Passcode gate → TeamContext → all views
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { TeamProvider, useTeam } from './utils/TeamContext.jsx';
 import { useMobile } from './utils/useMobile.js';
 import PasscodeEntry    from './components/PasscodeEntry.jsx';
@@ -108,6 +108,19 @@ function AppInner({ isCommissioner = false }) {
   const { logout } = useTeam();
   const [view, setView] = useState(isCommissioner ? VIEWS.LEAGUE : VIEWS.LINEUP);
 
+  // Fire a GA4 page_view event whenever the user switches tabs.
+  // The static gtag script in index.html only tracks the initial load —
+  // since this app never does a full page reload between tabs, in-app
+  // navigation needs to be reported manually like this.
+  useEffect(() => {
+    if (typeof window.gtag === 'function') {
+      window.gtag('event', 'page_view', {
+        page_title: view,
+        page_path: `/${view}`,
+      });
+    }
+  }, [view]);
+
   return (
     <>
       {view === VIEWS.LEAGUE  && <LeagueHome />}
@@ -116,7 +129,7 @@ function AppInner({ isCommissioner = false }) {
       {view === VIEWS.WAIVER  && <WaiverWire />}
       {view === VIEWS.TRADE   && <TradeAnalyzer />}
       {view === VIEWS.INJURY  && <InjuryDashboard />}
-      {view === VIEWS.DRAFT   && <DraftBoard />}          {/* ← NEW */}
+      {view === VIEWS.DRAFT   && <DraftBoard />}
       <Nav view={view} setView={setView} onLogout={logout} />
     </>
   );
