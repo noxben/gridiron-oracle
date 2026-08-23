@@ -27,7 +27,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import nfl_data_py as nfl
+import nflreadpy as nfl
 import pandas as pd
 
 logging.basicConfig(
@@ -54,7 +54,7 @@ INJURY_STATUS_MAP = {
     "Probable":     0.92,
 }
 
-DEFAULT_SEASON = 2024
+DEFAULT_SEASON = 2026
 
 
 def load_current_players(path: Path) -> list[dict]:
@@ -68,18 +68,22 @@ def load_current_players(path: Path) -> list[dict]:
 
 def fetch_latest_injuries() -> dict:
     """Returns { gsis_id: { play_probability, injury_detail } }"""
-    log.info("Fetching latest injury report from nfl_data_py...")
+    log.info("Fetching latest injury report (nflreadpy)...")
     try:
-        injuries = nfl.import_injuries(years=[DEFAULT_SEASON])
+        injuries = nfl.load_injuries([DEFAULT_SEASON]).to_pandas()
         result = {}
         for _, row in injuries.iterrows():
             gsis_id = row.get("gsis_id") or row.get("player_id")
             if not gsis_id:
                 continue
-            status  = str(row.get("report_status", "Active")).strip()
-            primary = str(row.get("primary_injury", "")).strip()
+            status  = str(row.get("report_status") or "Active").strip()
+            if status.lower() == "nan":
+                status = "Active"
+            primary = str(row.get("primary_injury") or "").strip()
+            if primary.lower() == "nan":
+                primary = ""
             play_prob = INJURY_STATUS_MAP.get(status, 1.0)
-            detail = f"{primary} — {status}" if primary and primary != "nan" else status
+            detail = f"{primary} — {status}" if primary else status
             result[str(gsis_id)] = {
                 "play_probability": play_prob,
                 "injury_detail":    detail,
@@ -89,7 +93,6 @@ def fetch_latest_injuries() -> dict:
     except Exception as e:
         log.error(f"Injury fetch failed: {e}")
         sys.exit(1)
-
 
 def apply_overlay(players: list[dict], injury_map: dict) -> tuple[list[dict], list[str]]:
     """
