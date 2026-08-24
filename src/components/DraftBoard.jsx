@@ -297,16 +297,30 @@ function useDraftPool() {
     const findMatch = (adpEntry) => {
       const compact = fullNameCompact(adpEntry.name);
       const candidates = PLAYERS_BY_POSITION[adpEntry.position] ?? [];
-      let best = null;
-      let bestLen = 0;
-      for (const p of candidates) {
+    
+      // Collect ALL candidates whose last name matches, not just the first/longest.
+      const matches = candidates.filter(p => {
         const last = lastNameFromInitialFormat(p.name);
-        if (last && compact.endsWith(last) && last.length > bestLen) {
-          best = p;
-          bestLen = last.length;
-        }
-      }
-      return best;
+        return last && compact.endsWith(last);
+      });
+    
+      if (matches.length === 0) return null;
+      if (matches.length === 1) return matches[0];
+    
+      // Multiple same-surname candidates (e.g. two "B.Robinson" at RB) —
+      // use team as a tiebreaker. Team data can be stale/wrong in some
+      // sources, but among genuine name collisions it's the best signal
+      // available to pick the right one rather than guessing.
+      const teamMatch = matches.find(
+        p => normalizeTeamForComparison(p.team) === normalizeTeamForComparison(adpEntry.team)
+      );
+      if (teamMatch) return teamMatch;
+    
+      // No team match either — fall back to the longest surname match,
+      // same as before. Rare case; logged for visibility rather than
+      // silently guessing.
+      console.warn(`[DraftBoard] Ambiguous match for "${adpEntry.name}" (${adpEntry.position}) — ${matches.length} candidates, no team match. Picking first.`);
+      return matches.sort((a, b) => lastNameFromInitialFormat(b.name).length - lastNameFromInitialFormat(a.name).length)[0];
     };
 
     // --- Pass 1: base data, ratings, opportunity, TD regression, market bid ---
