@@ -297,11 +297,15 @@ def fetch_snap_counts(season: int, week: int) -> pd.DataFrame:
 
 
 def fetch_usage_stats(weekly: pd.DataFrame, week: int) -> pd.DataFrame:
-    current_week = weekly[weekly["week"] == week].copy()
-    if current_week.empty:
-        current_week = weekly[weekly["week"] == weekly["week"].max()].copy()
+    """
+    Season-long average target share and air yards share — NOT a single
+    week's snapshot. Previously sampled only the most recent week, which
+    produced NaN/0 for elite players who happened to have a bye or a
+    quiet game in that specific week (e.g. Justin Jefferson, CeeDee Lamb
+    both showed target_share: NaN despite elite season-long usage).
+    """
     usage = (
-        current_week.groupby("player_id")
+        weekly.groupby("player_id")
         .agg(
             target_share=("target_share", "mean"),
             air_yards_share=("air_yards_share", "mean"),

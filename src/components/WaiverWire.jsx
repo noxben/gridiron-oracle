@@ -55,9 +55,9 @@ function estimateFAAB(vorp, maxVorpAtPos, remainingBudget, scarcityFactor) {
   if (maxVorpAtPos <= 0 || remainingBudget <= 0) return { low: 0, mid: 0, high: 0 };
   const base = (Math.max(0, vorp) / maxVorpAtPos) * remainingBudget * scarcityFactor;
   return {
-    low:  Math.round(base * 0.7),
+    low:  Math.round(base * 0.2),
     mid:  Math.round(base),
-    high: Math.round(base * 1.35),
+    high: Math.round(base * 0.7),
   };
 }
 
