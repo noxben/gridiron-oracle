@@ -172,6 +172,11 @@ def fetch_nflfastr_data(season: int, week: int) -> pd.DataFrame:
     rz_data = fetch_red_zone_shares(season, week)
 
     df = season_avg.merge(last3, on="gsis_id", how="left")
+
+    # Players without a game in the recent 3-week window use their
+    # season average rather than carrying NaN into the projection engine.
+    df["last3_avg_pts"] = df["last3_avg_pts"].fillna(df["season_avg_pts"])
+    
     df = df.merge(epa, on="gsis_id", how="left")
     df = df.merge(usage, on="gsis_id", how="left")
     df = df.merge(snap_data, on="gsis_id", how="left")
