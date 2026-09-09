@@ -6,6 +6,7 @@ import { useState } from 'react';
 import {
   ESPN_LEAGUE_DATA,
   ALL_TEAMS,
+  ALL_ROSTERS,
   ALL_MATCHUPS,
   STANDINGS,
   TRANSACTIONS,
@@ -21,28 +22,265 @@ import { useMobile, contentPadding } from '../utils/useMobile.js';
 
 import { C, font, serif } from '../utils/theme.js';
 
-// ---------------------------------------------------------------------------
-// Power rankings — algorithm-based per spec §3.1
-// Formula: 60% points_for + 40% win% (normalized across all teams)
-// ---------------------------------------------------------------------------
+// Power rankings
+//
+// Week 1:
+//   50% starting lineup projected strength
+//   25% roster depth
+//   15% player availability
+//   10% actual performance
+//
+// As the season progresses, actual performance gradually becomes
+// more important while preseason/projection-based strength declines.
 
-function computePowerRankings(teams) {
-  if (!teams || teams.length === 0) return [];
+function computePowerRankings(teams, rosters, week = 1) {
+  if (!teams?.length) return [];
 
-  const maxPF  = Math.max(...teams.map(t => t.points_for));
-  const minPF  = Math.min(...teams.map(t => t.points_for));
-  const pfRange = maxPF - minPF || 1;
+  const clamp = (value, min = 0, max = 100) =>
+    Math.max(min, Math.min(max, value));
 
-  return teams
-    .map(t => {
-      const totalGames = (t.wins + t.losses + (t.ties ?? 0)) || 1;
-      const winPct     = (t.wins + (t.ties ?? 0) * 0.5) / totalGames;
-      const pfScore    = (t.points_for - minPF) / pfRange;   // 0–1
-      const power      = (0.60 * pfScore) + (0.40 * winPct); // weighted
-      return { ...t, powerScore: power, winPct };
+  const safeNum = (value, fallback = 0) =>
+    typeof value === 'number' && Number.isFinite(value)
+      ? value
+      : fallback;
+
+  /*
+   * Season progression.
+   *
+   * Week 1 = almost entirely projection/roster based.
+   * By Week 8+, actual performance becomes the dominant signal.
+   */
+  const performanceWeight = clamp(
+    ((week - 1) / 7) * 0.30,
+    0,
+    0.30
+  );
+
+  const projectionWeight = 0.50 - (performanceWeight * 0.50);
+  const depthWeight = 0.25 - (performanceWeight * 0.25);
+  const availabilityWeight = 0.15 - (performanceWeight * 0.15);
+  const recordWeight = 0.10 + performanceWeight;
+
+  /*
+   * First calculate raw roster metrics for every team.
+   */
+  const metrics = teams.map(team => {
+    const roster = rosters?.[String(team.team_id)] ?? [];
+
+    const starters = roster.filter(
+      p =>
+        !p.on_bench &&
+        !p.on_ir &&
+        ['QB', 'RB', 'WR', 'TE', 'K', 'DST', 'D/ST'].includes(
+          p.position
+        )
+    );
+
+    const bench = roster.filter(
+      p =>
+        p.on_bench &&
+        !p.on_ir
+    );
+
+    /*
+     * Projected starter strength.
+     *
+     * FLEX isn't necessarily represented as a separate ESPN
+     * lineup slot in the exported roster, so we take the best
+     * eligible RB/WR/TE bench player as the potential FLEX.
+     */
+    const starterProjected = starters.reduce(
+      (sum, p) =>
+        sum +
+        safeNum(p.projected_points) *
+        safeNum(p.play_probability, 1),
+      0
+    );
+
+    const flexCandidates = bench
+      .filter(p =>
+        ['RB', 'WR', 'TE'].includes(p.position)
+      )
+      .sort(
+        (a, b) =>
+          safeNum(b.projected_points) -
+          safeNum(a.projected_points)
+      );
+
+    const flexProjected =
+      safeNum(
+        flexCandidates[0]?.projected_points,
+        0
+      ) *
+      safeNum(
+        flexCandidates[0]?.play_probability,
+        1
+      );
+
+    const totalStarterProjection =
+      starterProjected + flexProjected;
+
+    /*
+     * Bench depth.
+     *
+     * Best three bench players count, with diminishing weight.
+     */
+    const benchDepth =
+      bench
+        .sort(
+          (a, b) =>
+            safeNum(b.projected_points) -
+            safeNum(a.projected_points)
+        )
+        .slice(0, 3)
+        .reduce((sum, p, index) => {
+          const depthMultiplier =
+            index === 0 ? 0.35 :
+            index === 1 ? 0.25 :
+            0.15;
+
+          return (
+            sum +
+            safeNum(p.projected_points) *
+            safeNum(p.play_probability, 1) *
+            depthMultiplier
+          );
+        }, 0);
+
+    /*
+     * Availability.
+     *
+     * Measure the percentage of projected starter production
+     * that is actually available.
+     */
+    const availableStarterProjection =
+      starters.reduce(
+        (sum, p) =>
+          sum +
+          safeNum(p.projected_points) *
+          safeNum(p.play_probability, 1),
+        0
+      ) +
+      flexProjected;
+
+    const totalStarterProjectionRaw =
+      starters.reduce(
+        (sum, p) =>
+          sum + safeNum(p.projected_points),
+        0
+      ) +
+      safeNum(
+        flexCandidates[0]?.projected_points,
+        0
+      );
+
+    const availability =
+      totalStarterProjectionRaw > 0
+        ? (
+            availableStarterProjection /
+            totalStarterProjectionRaw
+          ) * 100
+        : 100;
+
+    /*
+     * Actual performance.
+     *
+     * In Week 1 this is effectively neutral because there
+     * are no results yet.
+     */
+    const totalGames =
+      safeNum(team.wins) +
+      safeNum(team.losses) +
+      safeNum(team.ties);
+
+    const winPct =
+      totalGames > 0
+        ? (
+            safeNum(team.wins) +
+            safeNum(team.ties) * 0.5
+          ) / totalGames
+        : 0.5;
+
+    const performance =
+      totalGames > 0
+        ? winPct * 100
+        : 50;
+
+    return {
+      ...team,
+      starterProjection: totalStarterProjection,
+      depthProjection: benchDepth,
+      availability,
+      performance,
+    };
+  });
+
+  /*
+   * Normalize projected/depth scores across the league.
+   */
+  const normalize = (values, value) => {
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+
+    if (!Number.isFinite(min) ||
+        !Number.isFinite(max) ||
+        max === min) {
+      return 50;
+    }
+
+    return ((value - min) / (max - min)) * 100;
+  };
+
+  const starterValues =
+    metrics.map(t => t.starterProjection);
+
+  const depthValues =
+    metrics.map(t => t.depthProjection);
+
+  /*
+   * Final score.
+   */
+  return metrics
+    .map(team => {
+      const starterScore = normalize(
+        starterValues,
+        team.starterProjection
+      );
+
+      const depthScore = normalize(
+        depthValues,
+        team.depthProjection
+      );
+
+      const availabilityScore =
+        clamp(team.availability);
+
+      const performanceScore =
+        clamp(team.performance);
+
+      const powerScore =
+        starterScore * projectionWeight +
+        depthScore * depthWeight +
+        availabilityScore * availabilityWeight +
+        performanceScore * recordWeight;
+
+      return {
+        ...team,
+        starterScore,
+        depthScore,
+        availabilityScore,
+        performanceScore,
+        powerScore,
+      };
     })
-    .sort((a, b) => b.powerScore - a.powerScore)
-    .map((t, i) => ({ ...t, powerRank: i + 1 }));
+    .sort(
+      (a, b) =>
+        b.powerScore - a.powerScore
+    )
+    .map((team, index) => ({
+      ...team,
+      powerRank: index + 1,
+    }));
 }
 
 // ---------------------------------------------------------------------------
@@ -290,84 +528,217 @@ function MatchupCard({ matchup, teams, myTeamId }) {
 // Power rankings strip
 // ---------------------------------------------------------------------------
 
-function PowerRankings({ rankedTeams, myTeamId }) {
-  const top3 = rankedTeams.slice(0, 3);
-  const rest = rankedTeams.slice(3);
-
+function PowerMetric({ label, value }) {
   return (
     <div>
-      {/* Top 3 — highlighted */}
-      {top3.map((team, i) => (
-        <div key={team.team_id} style={{
-          display:      'flex',
-          alignItems:   'center',
-          padding:      '10px 0',
-          borderBottom: `1px solid ${C.border}`,
-          gap:          '12px',
-        }}>
-          <span style={{
-            fontSize:   '18px',
-            fontFamily: serif,
-            color:      i === 0 ? C.accent : i === 1 ? C.textMid : C.textDim,
-            width:      '24px',
-            flexShrink: 0,
-          }}>
-            {i + 1}
-          </span>
-          <div style={{ flex: 1 }}>
-            <div style={{
-              fontSize:   '12px',
-              color:      isMyTeam(team.team_id, myTeamId) ? C.accent : C.text,
-              fontWeight: isMyTeam(team.team_id, myTeamId) ? '600' : '400',
-            }}>
-              {shortName(team.team_name)}
-            </div>
-            <div style={{ fontSize: '10px', color: C.textDim, marginTop: '2px' }}>
-              {recordStr(team)} · {team.points_for?.toFixed(0)} pts
-            </div>
-          </div>
-          {/* Power score bar */}
-          <div style={{ width: '80px' }}>
-            <div style={{ height: '2px', background: C.border, borderRadius: '1px', overflow: 'hidden' }}>
-              <div style={{
-                height:     '100%',
-                width:      `${team.powerScore * 100}%`,
-                background: i === 0 ? C.accent : C.textMid,
-                borderRadius: '1px',
-              }} />
-            </div>
-          </div>
-        </div>
-      ))}
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          fontSize: '8px',
+          color: C.textDim,
+          marginBottom: '4px',
+        }}
+      >
+        <span>{label}</span>
+        <span>{value.toFixed(0)}</span>
+      </div>
 
-      {/* Ranks 4–12 — condensed */}
-      {rest.map(team => (
-        <div key={team.team_id} style={{
-          display:      'flex',
-          alignItems:   'center',
-          padding:      '7px 0',
-          borderBottom: `1px solid ${C.border}`,
-          gap:          '12px',
-        }}>
-          <span style={{ fontSize: '10px', color: C.textDim, width: '24px', flexShrink: 0 }}>
-            {team.powerRank}
-          </span>
-          <span style={{
-            fontSize:   '11px',
-            color:      isMyTeam(team.team_id, myTeamId) ? C.accent : C.textMid,
-            fontWeight: isMyTeam(team.team_id, myTeamId) ? '600' : '400',
-            flex:       1,
-          }}>
-            {shortName(team.team_name)}
-          </span>
-          <span style={{ fontSize: '10px', color: C.textDim }}>
-            {recordStr(team)}
-          </span>
-          <span style={{ fontSize: '10px', color: C.textDim, width: '52px', textAlign: 'right' }}>
-            {team.points_for?.toFixed(0)} pts
-          </span>
-        </div>
-      ))}
+      <div
+        style={{
+          height: '3px',
+          background: C.border,
+          borderRadius: '2px',
+          overflow: 'hidden',
+        }}
+      >
+        <div
+          style={{
+            width: `${Math.max(
+              0,
+              Math.min(100, value)
+            )}%`,
+            height: '100%',
+            background: C.textMid,
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function PowerRankings({ teams, myTeamId, week }) {
+  return (
+    <div>
+      <SectionHeader
+        label="Power rankings"
+        right={`Week ${week} · projection based`}
+      />
+
+      <div
+        style={{
+          fontSize: '11px',
+          color: C.textDim,
+          marginBottom: '14px',
+          lineHeight: 1.5,
+        }}
+      >
+        Rankings emphasize projected starting strength,
+        roster depth, and player availability. Actual
+        performance gains weight as the season progresses.
+      </div>
+
+      <div
+        style={{
+          border: `1px solid ${C.border}`,
+          borderRadius: '6px',
+          overflow: 'hidden',
+        }}
+      >
+        {teams.map((team, index) => {
+          const isMine =
+            String(team.team_id) === String(myTeamId);
+
+          return (
+            <div
+              key={team.team_id}
+              style={{
+                padding: '12px 14px',
+                borderBottom:
+                  index < teams.length - 1
+                    ? `1px solid ${C.border}`
+                    : 'none',
+                background: isMine
+                  ? C.red + '08'
+                  : 'transparent',
+              }}
+            >
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns:
+                    '32px minmax(180px, 1fr) 70px 90px',
+                  gap: '12px',
+                  alignItems: 'center',
+                }}
+              >
+                {/* Rank */}
+                <div
+                  style={{
+                    fontFamily: serif,
+                    fontSize: '16px',
+                    color:
+                      team.powerRank <= 3
+                        ? C.text
+                        : C.textDim,
+                  }}
+                >
+                  {team.powerRank}
+                </div>
+
+                {/* Team */}
+                <div>
+                  <div
+                    style={{
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      color: C.text,
+                    }}
+                  >
+                    {team.team_name}
+                    {isMine && (
+                      <span
+                        style={{
+                          marginLeft: '7px',
+                          fontSize: '9px',
+                          color: C.red,
+                        }}
+                      >
+                        YOU
+                      </span>
+                    )}
+                  </div>
+
+                  <div
+                    style={{
+                      fontSize: '9px',
+                      color: C.textDim,
+                      marginTop: '3px',
+                    }}
+                  >
+                    {team.wins}-{team.losses}
+                    {team.ties
+                      ? `-${team.ties}`
+                      : ''}
+                  </div>
+                </div>
+
+                {/* Score */}
+                <div
+                  style={{
+                    textAlign: 'right',
+                    fontFamily: serif,
+                    fontSize: '18px',
+                    color: C.text,
+                  }}
+                >
+                  {team.powerScore.toFixed(1)}
+                </div>
+
+                {/* Projected */}
+                <div
+                  style={{
+                    textAlign: 'right',
+                    fontSize: '10px',
+                    color: C.textMid,
+                  }}
+                >
+                  <div>
+                    {team.starterProjection.toFixed(1)}
+                    {' '}proj.
+                  </div>
+                  <div
+                    style={{
+                      marginTop: '3px',
+                      color: C.textDim,
+                    }}
+                  >
+                    {team.availabilityScore.toFixed(0)}%
+                    {' '}available
+                  </div>
+                </div>
+              </div>
+
+              {/* Detail bar */}
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns:
+                    '1fr 1fr 1fr',
+                  gap: '12px',
+                  marginTop: '10px',
+                  paddingLeft: '44px',
+                }}
+              >
+                <PowerMetric
+                  label="STARTERS"
+                  value={team.starterScore}
+                />
+
+                <PowerMetric
+                  label="DEPTH"
+                  value={team.depthScore}
+                />
+
+                <PowerMetric
+                  label="AVAILABILITY"
+                  value={team.availabilityScore}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -451,8 +822,11 @@ export default function LeagueHome() {
   const fetchedAt    = LEAGUE_FETCHED_AT;
   const age          = fetchAge(fetchedAt);
 
-  const powerRanked  = computePowerRankings(teams);
-
+  const powerRanked = computePowerRankings(
+    teams,
+    ALL_ROSTERS,
+    week
+  );
   // No data guard
   if (teams.length === 0) {
     return (
@@ -574,7 +948,11 @@ export default function LeagueHome() {
                 borderRadius: '6px',
                 padding:      '0 20px',
               }}>
-                <PowerRankings rankedTeams={powerRanked} myTeamId={myTeamId} />
+                <PowerRankings
+				  teams={powerRanked}
+				  myTeamId={myTeamId}
+				  week={week}
+				/>
               </div>
               <div style={{ marginTop: '12px', fontSize: '10px', color: C.textDim, lineHeight: 1.6 }}>
                 Power ranking rewards teams scoring well regardless of record. A team with bad luck (high PA) will rank higher here than in the standings.

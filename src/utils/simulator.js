@@ -80,6 +80,18 @@ const STARTERS_BY_LEAGUE_SIZE = {
 };
 
 // ---------------------------------------------------------------------------
+// Safe numeric coercion — nfl_data.js can contain literal NaN values (not
+// null/undefined) for players with incomplete stat coverage. The `??`
+// operator does NOT catch NaN (NaN ?? 0 evaluates to NaN, since NaN is
+// technically "defined") — this has caused silent NaN propagation through
+// projections, VORP, and simulation scores multiple times. Use this
+// instead of `??` for any numeric field sourced from nfl_data.js.
+// ---------------------------------------------------------------------------
+export function safeNum(v, fallback = 0) {
+  return (typeof v === 'number' && !Number.isNaN(v)) ? v : fallback;
+}
+
+// ---------------------------------------------------------------------------
 // Composite rating
 // ---------------------------------------------------------------------------
 
@@ -93,8 +105,6 @@ const STARTERS_BY_LEAGUE_SIZE = {
  * @returns {number} 0–100
  */
 export function computeCompositeRating(player, allPlayers) {
-  const safeNum = (v) => (typeof v === 'number' && !Number.isNaN(v)) ? v : 0;
-
   const pos     = player.position ?? 'WR';
   const weights = WEIGHTS[pos] ?? WEIGHTS['WR'];
   const peers   = allPlayers.filter(p => p.position === pos);
@@ -164,19 +174,11 @@ function getSystemAdjustment(player) {
  * @returns {number} projected points (50th percentile)
  */
 export function projectPoints(player, compositeRating, override = 0) {
-  // Base: weighted avg of season and last-3 (recency weighted 60/40)
-  const seasonAvg = player.season_avg_pts ?? 0;
-  const last3Avg  = player.last3_avg_pts  ?? seasonAvg;
+  const seasonAvg = safeNum(player.season_avg_pts);
+  const last3Avg  = safeNum(player.last3_avg_pts, seasonAvg);
   const basePoints = (0.40 * seasonAvg) + (0.60 * last3Avg);
-
-  // Rating adjustment: normalize composite rating to a multiplier around 1.0
-  // A rating of 50 = no adjustment, 100 = +20%, 0 = -20%
-  const ratingMult = 0.8 + (compositeRating / 100) * 0.4;
-
-  // Override: maps -150..+150 override to approx -4.5..+4.5 points
-  // Per spec §6.3: +100 override ≈ +3.0 pts projected
+  const ratingMult = 0.8 + (safeNum(compositeRating, 50) / 100) * 0.4;
   const overridePts = (override / 100) * 3.0;
-
   return Math.max(0, (basePoints * ratingMult) + overridePts);
 }
 
@@ -243,17 +245,12 @@ function samplePlayerScore(projectedPts, varianceMult, playProb, replacementPts)
 export function getReplacementLevel(position, leagueSize) {
   const starters    = STARTERS_BY_LEAGUE_SIZE[leagueSize] ?? STARTERS_BY_LEAGUE_SIZE[12];
   const starterCount = starters[position] ?? 12;
-
-  // Get all players at this position sorted by season avg
   const posPlayers = (PLAYERS_BY_POSITION[position] ?? [])
-    .filter(p => p.season_avg_pts > 0)
-    .sort((a, b) => b.season_avg_pts - a.season_avg_pts);
-
-  // Replacement = the player just outside starter threshold
+    .filter(p => safeNum(p.season_avg_pts) > 0)
+    .sort((a, b) => safeNum(b.season_avg_pts) - safeNum(a.season_avg_pts));
   const replacement = posPlayers[starterCount] ?? posPlayers[posPlayers.length - 1];
-  return replacement?.season_avg_pts ?? 3.0; // fallback 3 pts
+  return safeNum(replacement?.season_avg_pts, 3.0);
 }
-
 /**
  * Compute VORP (Value Over Replacement Player) for a player.
  * Per spec §5.2 — the correct metric for start/sit and trade decisions.
@@ -427,7 +424,6 @@ export function prepareLineup(espnRoster, overrides = {}, leagueSize = 12) {
     .filter(p => !p.onBench && !p.onIR)   // starters only
     .map(rosterEntry => {
       const playerData = PLAYER_BY_GSIS_ID[rosterEntry.gsisId];
-      console.log('[prepareLineup]', rosterEntry.name, 'gsisId:', rosterEntry.gsisId, 'found:', !!playerData);
       if (!playerData) {
         // Unknown player — use ESPN's projected points as fallback
         return {
@@ -444,8 +440,13 @@ export function prepareLineup(espnRoster, overrides = {}, leagueSize = 12) {
       }
 
       const override = overrides[rosterEntry.gsisId] ?? 0;
-      const { rating: compositeRating, epaScore, usageScore, snapScore, redZoneScore } =
-        computeCompositeRating(playerData, allPlayers);
+      const {
+        rating: compositeRating,
+        epaScore,
+        usageScore,
+        snapScore,
+        redZoneScore
+      } = computeCompositeRating(playerData, allPlayers);
       const projectedPts = projectPoints(playerData, compositeRating, override);
       const varianceMult    = getVarianceMultiplier(playerData);
       const vorp            = computeVORP(playerData, projectedPts, leagueSize);
@@ -632,30 +633,28 @@ function buildScoreDist(scores) {
 function buildPlayerResult(player, teamScores, oppTeamScores) {
   return {
     gsisId:          player.gsisId,
-    lineupSlot:      player.lineupSlot,   // ← add this line
+    lineupSlot:      player.lineupSlot,
     name:            player.name,
     position:        player.position,
     team:            player.team,
-    compositeRating: player.compositeRating,
-    projectedPts:    round2(player.projectedPts),
-    vorp:            round2(player.vorp ?? 0),
-    varianceMult:    player.varianceMult,
+    compositeRating: safeNum(player.compositeRating, 50),
+    projectedPts:    round2(safeNum(player.projectedPts)),
+    vorp:            round2(safeNum(player.vorp)),
+    varianceMult:    safeNum(player.varianceMult, 1.0),
     varianceProfile: getVarianceLabel(player),
     override:        player.override ?? 0,
-    play_probability: player.play_probability ?? 1.0,
+    play_probability: safeNum(player.play_probability, 1.0),
     injuryDetail:    player.injuryDetail ?? '',
     opp_def_rank:    player.opp_def_rank ?? 16,
-    epa_per_play:    player.epa_per_play ?? 0,
-    // Component scores for UI transparency
+    epa_per_play:    safeNum(player.epa_per_play),
     scores: {
-      epa:     round2(player.epa_score ?? 50),
-      usage:   round2(player.usage_score ?? 50),
-      snap:    round2(player.snap_score ?? 50),
-      redZone: round2(player.red_zone_score ?? 50),
+      epa:     round2(safeNum(player.epa_score, 50)),
+      usage:   round2(safeNum(player.usage_score, 50)),
+      snap:    round2(safeNum(player.snap_score, 50)),
+      redZone: round2(safeNum(player.red_zone_score, 50)),
     },
   };
 }
-
 function findHighestVariancePlayer(lineup) {
   return lineup.reduce((best, p) => {
     const score = (p.varianceMult ?? 1.0) * (p.projectedPts ?? 0);

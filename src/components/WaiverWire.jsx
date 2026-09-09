@@ -48,16 +48,143 @@ function computeVORP(player, replacementLevel) {
 
 // ---------------------------------------------------------------------------
 // FAAB bid estimator — per spec §6.3
-// bid = (player_vorp / max_vorp_at_position) × remaining_budget × scarcity_factor
 // ---------------------------------------------------------------------------
 
-function estimateFAAB(vorp, maxVorpAtPos, remainingBudget, scarcityFactor) {
-  if (maxVorpAtPos <= 0 || remainingBudget <= 0) return { low: 0, mid: 0, high: 0 };
-  const base = (Math.max(0, vorp) / maxVorpAtPos) * remainingBudget * scarcityFactor;
+function estimateFAAB({
+  player,
+  remainingBudget,
+  scarcityFactor,
+  dropCandidate,
+  currentWeek = 1,
+}) {
+  if (remainingBudget <= 0) {
+    return { low: 0, mid: 0, high: 0 };
+  }
+
+  const weeklyVorp = Math.max(0, player.vorp ?? 0);
+  const playProbability = Math.max(
+    0,
+    Math.min(1, player.play_probability ?? 1.0)
+  );
+
+  if (weeklyVorp <= 0) {
+    return { low: 0, mid: 0, high: 0 };
+  }
+
+  // Fantasy weeks remaining in the season.
+  // Keep this conservative rather than assuming every remaining NFL
+  // week produces usable fantasy value.
+  const remainingWeeks = Math.max(1, 17 - currentWeek);
+
+  // Expected remaining-season value.
+  const seasonValue =
+    weeklyVorp *
+    remainingWeeks *
+    playProbability;
+
+  /*
+   * Roster need:
+   *
+   * A waiver player who merely improves the bench should not command
+   * the same bid as someone who immediately upgrades a starting slot.
+   */
+  let needMultiplier = 0.85;
+
+  if (dropCandidate) {
+    const dropPts =
+      dropCandidate.projected_points ??
+      dropCandidate.avg_points ??
+      0;
+
+    const addPts =
+      player.projected_points ??
+      player.avg_points ??
+      0;
+
+    const improvement = addPts - dropPts;
+
+    if (improvement >= 8) {
+      needMultiplier = 1.60;
+    } else if (improvement >= 5) {
+      needMultiplier = 1.40;
+    } else if (improvement >= 3) {
+      needMultiplier = 1.20;
+    } else if (improvement >= 1) {
+      needMultiplier = 1.00;
+    }
+  }
+
+  /*
+   * Convert season value into a bounded share of the bankroll.
+   *
+   * This is intentionally nonlinear. Going from a 2-point VORP player
+   * to a 4-point VORP player is meaningful, but it does not mean
+   * doubling the percentage of your entire season bankroll.
+   */
+  const valueScore =
+    Math.min(1, Math.sqrt(seasonValue / 50));
+
+  /*
+   * Season aggression:
+   *
+   * Early season -> preserve bankroll.
+   * Late season -> remaining FAAB has less future utility.
+   */
+  const seasonProgress =
+    Math.max(0, Math.min(1, (currentWeek - 1) / 16));
+
+  const aggressionMultiplier =
+    0.65 + (seasonProgress * 0.55);
+
+  /*
+   * Scarcity matters, but only moderately. A thin position should
+   * increase the bid, not turn a $5 player into a $50 player.
+   */
+  const scarcityMultiplier =
+    0.90 + ((scarcityFactor - 1.0) * 0.65);
+
+  /*
+   * Maximum reasonable share of the remaining bankroll.
+   *
+   * 50% is an intentionally hard ceiling for a normal waiver claim.
+   * If we ever need to spend more than that, the model should require
+   * an explicit special case rather than quietly burning the bankroll.
+   */
+  const maxBankrollShare = 0.50;
+
+  const bankrollShare =
+    Math.min(
+      maxBankrollShare,
+      0.025 +
+      (valueScore * 0.30) *
+      needMultiplier *
+      scarcityMultiplier *
+      aggressionMultiplier
+    );
+
+  const mid = Math.min(
+    remainingBudget,
+    Math.round(remainingBudget * bankrollShare)
+  );
+
+  /*
+   * Low = cautious bid.
+   * High = aggressive bid, but still bounded by the seasonal bankroll.
+   */
+  const low = Math.min(
+    remainingBudget,
+    Math.max(1, Math.round(mid * 0.60))
+  );
+
+  const high = Math.min(
+    remainingBudget,
+    Math.max(mid, Math.round(mid * 1.50))
+  );
+
   return {
-    low:  Math.round(base * 0.2),
-    mid:  Math.round(base),
-    high: Math.round(base * 0.7),
+    low,
+    mid,
+    high,
   };
 }
 
@@ -388,7 +515,7 @@ export default function WaiverWire() {
   // Get my team's remaining FAAB
   const myTeamId      = MY_TEAM?.team_id;
   const remainingFAAB = myTeamId
-    ? (FAAB_BUDGETS?.[String(myTeamId)] ?? 100)
+    ? (FAAB_BUDGETS?.[String(myTeamId)] ?? FAAB_BUDGETS?.[Number(myTeamId)] ?? 100)
     : 100;
 
   // Enrich waiver pool with nfl_data.js stats
@@ -420,7 +547,8 @@ export default function WaiverWire() {
     const map = {};
     for (const pos of ['QB', 'RB', 'WR', 'TE', 'K', 'DST']) {
       const posPlayers = withVORP.filter(p => p.position === pos);
-      map[pos] = Math.max(0, ...posPlayers.map(p => p.vorp ?? 0));
+      const maxVal = Math.max(0, ...posPlayers.map(p => p.vorp ?? 0));
+      map[pos] = maxVal > 0 ? maxVal : 1;
     }
     return map;
   }, [withVORP]);
@@ -463,6 +591,16 @@ export default function WaiverWire() {
       </div>
     );
   }
+
+	// Diagnostic logging inside WaiverWire component
+	  console.log('--- WAIVER WIRE DEBUG ---');
+	  console.log('MY_TEAM:', MY_TEAM);
+	  console.log('remainingFAAB:', remainingFAAB);
+	  console.log('Sample enriched player:', enrichedPool[0]);
+	  console.log('Replacement Map:', replacementMap);
+	  console.log('Max VORP By Pos:', maxVORPByPos);
+	  console.log('Sample filtered player with VORP:', filtered[0]);
+
 
   return (
     <>
@@ -582,6 +720,7 @@ export default function WaiverWire() {
             </div>
           )}
 
+
           {/* Table */}
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
@@ -613,12 +752,13 @@ export default function WaiverWire() {
             <tbody>
               {filtered.map((player, i) => {
                 const dropCandidate = findDropCandidate(player.position, myRoster, replacementMap);
-                const faabBid       = estimateFAAB(
-                  player.vorp ?? 0,
-                  maxVORPByPos[player.position] ?? 1,
-                  remainingFAAB,
-                  scarcityMap[player.position] ?? 1.0,
-                );
+                const faabBid = estimateFAAB({
+                  player,
+                  remainingBudget: remainingFAAB,
+                  scarcityFactor: scarcityMap[player.position] ?? 1.0,
+                  dropCandidate,
+                  currentWeek: ESPN_LEAGUE_DATA?.scoringPeriodId ?? 1,
+                });
                 return (
                   <WaiverRow
                     key={player.espn_id ?? i}

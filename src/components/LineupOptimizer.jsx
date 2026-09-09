@@ -295,33 +295,67 @@ function PlayerRow({ player, override, onOverride, rank, isVarianceKing }) {
           <td colSpan={6} style={{ padding: '0 0 16px 32px' }}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', paddingTop: '12px' }}>
 
-              {/* Rating breakdown */}
-              <div>
-                <div style={{ fontSize: '9px', letterSpacing: '0.14em', color: C.textDim, textTransform: 'uppercase', marginBottom: '10px' }}>
-                  Rating breakdown
-                </div>
-                {[
-                  { label: 'EPA / play', val: player.scores?.epa },
-                  { label: 'Usage', val: player.scores?.usage },
-                  { label: 'Snap %', val: player.scores?.snap },
-                  { label: 'Red zone', val: player.scores?.redZone },
-                ].map(({ label, val }) => (
-                  <div key={label} style={{ marginBottom: '7px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '3px' }}>
-                      <span style={{ fontSize: '10px', color: C.textMid }}>{label}</span>
-                      <span style={{ fontSize: '10px', color: C.text }}>{val?.toFixed(0)}</span>
-                    </div>
-                    <ProgressBar value={val ?? 0} max={100} color={C.accent} />
-                  </div>
-                ))}
-                <div style={{ marginTop: '10px', display: 'flex', justifyContent: 'space-between' }}>
-                  <span style={{ fontSize: '10px', color: C.textMid }}>Composite</span>
-                  <span style={{ fontSize: '12px', color: C.accent, fontWeight: '600' }}>
-                    {player.compositeRating?.toFixed(0)}
+      {/* Rating breakdown */}
+           <div>
+            <div style={{
+              fontSize: '9px',
+              letterSpacing: '0.14em',
+              color: C.textDim,
+              textTransform: 'uppercase',
+              marginBottom: '10px'
+            }}>
+              Rating breakdown
+            </div>
+           
+            <div>
+              {[
+               { label: 'EPA / play', val: player.scores?.epa },
+               { label: 'Usage', val: player.scores?.usage },
+               { label: 'Snap %', val: player.scores?.snap },
+               { label: 'Red zone', val: player.scores?.redZone },
+              ].map(({ label, val }) => (
+               <div key={label} style={{ marginBottom: '7px' }}>
+                 <div style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  marginBottom: '3px'
+                 }}>
+                  <span style={{ fontSize: '10px', color: C.textMid }}>
+                    {label}
                   </span>
-                </div>
-              </div>
-
+                  <span style={{ fontSize: '10px', color: C.text }}>
+                    {val != null ? val.toFixed(0) : '—'}
+                  </span>
+                 </div>
+           
+                 <ProgressBar
+                  value={val ?? 0}
+                  max={100}
+                  color={C.accent}
+                 />
+               </div>
+              ))}
+            </div>
+           
+            <div style={{
+              marginTop: '10px',
+              display: 'flex',
+              justifyContent: 'space-between'
+            }}>
+              <span style={{ fontSize: '10px', color: C.textMid }}>
+               Composite
+              </span>
+              <span style={{
+               fontSize: '12px',
+               color: C.accent,
+               fontWeight: '600'
+              }}>
+               {player.compositeRating != null
+                 ? player.compositeRating.toFixed(0)
+                 : '—'}
+              </span>
+            </div>
+           </div>
               {/* Override */}
               <div>
                 <div style={{ fontSize: '9px', letterSpacing: '0.14em', color: C.textDim, textTransform: 'uppercase', marginBottom: '10px' }}>
