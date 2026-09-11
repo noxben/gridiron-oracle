@@ -29,7 +29,7 @@ on:
       season:
         description: "NFL season year"
         required: false
-        default: "2024"
+        default: "2026"
         type: string
       dry_run:
         description: "Dry run (build data but don't commit)"
