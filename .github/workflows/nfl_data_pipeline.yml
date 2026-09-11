@@ -2,22 +2,27 @@
 # Gridiron Oracle — Automated data pipeline
 #
 # Runs:
-#   - Twice daily (08:00 and 18:00 UTC) for general refreshes
-#   - Extra frequency on Sundays for last-minute changes/injury reports
+#   - Tuesday 12:00 UTC  — full stats refresh, after MNF
+#   - Thursday 13:00 UTC — full stats refresh, before TNF
+#   - Daily 11:00 + 23:00 UTC — league fetch (rosters, waivers, standings)
+#   - Sunday 15:00/17:00/19:00/21:00 UTC — extra league fetches on game day
+#   - Sunday 15:00 UTC — injury overlay
 #   - Manual trigger (workflow_dispatch) for on-demand runs
 #
-# Secrets required (set in GitHub repo → Settings → Secrets):
-#   - ESPN_S2
-#   - SWID
+# Secrets required (GitHub repo → Settings → Secrets → Actions):
+#   ESPN_S2, SWID — required for fetch_espn_league.py and injury_overlay.py
+#   (update_nfl_data.py alone doesn't need these — it uses public nflreadpy data)
 
 name: NFL Data Pipeline
 
 on:
   schedule:
-    # Twice daily general runs (08:00 and 18:00 UTC)
-    - cron: "0 8,18 * * *"
-    # Additional Sunday frequent checks for last-minute updates/inactives (11:00, 15:00, 20:00 UTC)
-    - cron: "0 11,15,20 * * 0"
+    - cron: "0 12 * * 2"          # Tuesday — full stats refresh
+    - cron: "0 13 * * 4"          # Thursday — full stats refresh
+    - cron: "0 11 * * *"          # Daily — league fetch, morning
+    - cron: "0 23 * * *"          # Daily — league fetch, evening
+    - cron: "0 15,17,19,21 * * 0" # Sunday — extra league fetches during games
+    - cron: "0 15 * * 0"          # Sunday — injury overlay
   workflow_dispatch:
     inputs:
       week:
@@ -40,33 +45,27 @@ jobs:
     name: Update NFL Data
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 12 * * 2' || github.event.schedule == '0 13 * * 4'
     permissions:
       contents: write
       pull-requests: write
     steps:
-      # ── Checkout ─────────────────────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-      # ── Python setup ─────────────────────────────────────────────────────
+
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
+
       - name: Install dependencies
         run: |
           pip install --upgrade pip
           pip install nflreadpy pandas pyarrow requests python-dotenv
-     # ── Run ESPN league sync ──────────────────────────────────────────────
-      - name: Fetch ESPN League Data
-        env:
-          ESPN_S2: ${{ secrets.ESPN_S2 }}
-          SWID: ${{ secrets.SWID }}
-        run: |
-          python scripts/fetch_espn_league.py
-      # ── Run pipeline ──────────────────────────────────────────────────────
+
       - name: Run data pipeline
         id: pipeline
         run: |
@@ -81,74 +80,108 @@ jobs:
             ARGS="$ARGS --dry-run"
           fi
           python scripts/update_nfl_data.py $ARGS
-          # Capture player count for commit message
           PLAYER_COUNT=$(python -c "
-          import re, json
+          import re
           content = open('src/utils/nfl_data.js').read()
           m = re.search(r'player_count: (\d+)', content)
           print(m.group(1) if m else '?')
           ")
           echo "player_count=$PLAYER_COUNT" >> $GITHUB_OUTPUT
-      # ── Validate ──────────────────────────────────────────────────────────
+
       - name: Validate output
-        run: |
-          python scripts/validate_data.py
-      # ── Commit and push ───────────────────────────────────────────────────
+        run: python scripts/validate_data.py
+
       - name: Check for changes
         id: changes
         run: |
           git diff --quiet src/utils/nfl_data.js && echo "changed=false" >> $GITHUB_OUTPUT || echo "changed=true" >> $GITHUB_OUTPUT
+
       - name: Commit updated nfl_data.js
         if: steps.changes.outputs.changed == 'true' && github.event.inputs.dry_run != 'true'
         run: |
           git config user.name  "Gridiron Oracle Bot"
           git config user.email "bot@gridiron-oracle.app"
           DAY=$(date +%A)
-          WEEK_LABEL="Automated update"
-          if [ "$DAY" = "Tuesday" ]; then
-            WEEK_LABEL="Post-MNF stats update"
-          elif [ "$DAY" = "Thursday" ]; then
-            WEEK_LABEL="Pre-TNF injury update"
-          elif [ "$DAY" = "Sunday" ]; then
-            WEEK_LABEL="Sunday game-day update"
-          fi
+          WEEK_LABEL="Weekly update"
+          if [ "$DAY" = "Tuesday" ]; then WEEK_LABEL="Post-MNF stats update"; fi
+          if [ "$DAY" = "Thursday" ]; then WEEK_LABEL="Pre-TNF stats update"; fi
           git add src/utils/nfl_data.js
           git commit -m "data: $WEEK_LABEL — ${{ steps.pipeline.outputs.player_count }} players [${{ github.run_id }}]"
           git push origin main
-      - name: No changes detected
-        if: steps.changes.outputs.changed == 'false'
-        run: echo "nfl_data.js is already up to date — no commit needed"
-      # ── Failure notification ───────────────────────────────────────────────
+
       - name: Pipeline summary
         if: always()
         run: |
           echo "## Pipeline Result" >> $GITHUB_STEP_SUMMARY
           echo "- **Status:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Players:** ${{ steps.pipeline.outputs.player_count }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Changes committed:** ${{ steps.changes.outputs.changed }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Run:** ${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
 
-  # Separate job: injury-only overlay (runs Sunday afternoons)
-  injury-overlay:
-    name: Injury Report Overlay
+  update-league:
+    name: Update League Data (rosters, waivers, standings)
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    if: github.event_name == 'schedule'
+    timeout-minutes: 10
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.schedule == '0 11 * * *' ||
+      github.event.schedule == '0 23 * * *' ||
+      github.event.schedule == '0 15,17,19,21 * * 0'
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
-      - run: pip install nflreadpy pandas python-dotenv
+      - run: pip install espn_api python-dotenv
+
+      - name: Write ESPN credentials
+        run: |
+          echo "ESPN_S2=${{ secrets.ESPN_S2 }}" > .env
+          echo "SWID=${{ secrets.SWID }}" >> .env
+
+      - name: Fetch league data
+        run: python scripts/fetch_espn_league.py
+
+      - name: Commit if changed
+        run: |
+          git config user.name  "Gridiron Oracle Bot"
+          git config user.email "bot@gridiron-oracle.app"
+          git diff --quiet src/utils/espn_league.js || (
+            git add src/utils/espn_league.js &&
+            git commit -m "data: league refresh (rosters/waivers/standings) [${{ github.run_id }}]" &&
+            git push origin main
+          )
+
+  injury-overlay:
+    name: Injury Report Overlay
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 15 * * 0'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - run: pip install requests python-dotenv
+
+      - name: Write ESPN credentials
+        run: |
+          echo "ESPN_S2=${{ secrets.ESPN_S2 }}" > .env
+          echo "SWID=${{ secrets.SWID }}" >> .env
+
       - name: Apply injury overlay
         run: python scripts/injury_overlay.py
+
       - name: Commit if changed
         run: |
           git config user.name  "Gridiron Oracle Bot"
           git config user.email "bot@gridiron-oracle.app"
           git diff --quiet src/utils/nfl_data.js || (
             git add src/utils/nfl_data.js &&
-            git commit -m "data: Sunday injury overlay [${{ github.run_id }}]" &&
+            git commit -m "data: injury overlay [${{ github.run_id }}]" &&
             git push origin main
           )
