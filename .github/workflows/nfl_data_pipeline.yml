@@ -155,7 +155,7 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - run: pip install nfl_data_py pandas python-dotenv
+      - run: pip install nflreadpy pandas python-dotenv
 
       - name: Apply injury overlay
         run: python scripts/injury_overlay.py
