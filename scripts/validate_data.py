@@ -102,8 +102,8 @@ def validate(players: list[dict], strict: bool = False) -> tuple[list[str], list
         errors.append("NFL_PLAYERS array is empty")
         return errors, warnings
 
-    if len(players) < 100:
-        warnings.append(f"Only {len(players)} players — expected 200+ for a full season")
+    if len(players) < 400:
+    errors.append(f"Only {len(players)} players — expected 400+ for a full season (got {len(players)})")
 
     for i, r in enumerate(players):
         ctx = f"[{i}] {r.get('name', '?')} ({r.get('gsis_id', 'NO_ID')})"
