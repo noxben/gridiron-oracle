@@ -166,7 +166,7 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
-      - run: pip install requests python-dotenv
+      - run: pip install pandas requests python-dotenv
 
       - name: Write ESPN credentials
         run: |
