@@ -17,13 +17,13 @@ name: NFL Data Pipeline
 
 on:
 #  temporarily turned off schedule while testing, remove comments once ready to deploy
-#  schedule:
-#    - cron: "0 12 * * 2"         # Tuesday — full stats refresh
-#    - cron: "0 13 * * 4"         # Thursday — full stats refresh
-#    - cron: "0 11 * * *"         # Daily — league fetch, morning
-#    - cron: "0 23 * * *"         # Daily — league fetch, evening
-#    - cron: "0 15,17,19,21 * * 0" # Sunday — extra league fetches during games
-#    - cron: "0 15 * * 0"         # Sunday — injury overlay
+  schedule:
+    - cron: "0 12 * * 2"         # Tuesday — full stats refresh
+    - cron: "0 13 * * 4"         # Thursday — full stats refresh
+    - cron: "0 11 * * *"         # Daily — league fetch, morning
+    - cron: "0 23 * * *"         # Daily — league fetch, evening
+    - cron: "0 15,17,19,21 * * 0" # Sunday — extra league fetches during games
+    - cron: "0 15 * * 0"         # Sunday — injury overlay
   workflow_dispatch:
     inputs:
       week:
