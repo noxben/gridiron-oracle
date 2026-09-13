@@ -110,7 +110,7 @@ def validate(players: list[dict], strict: bool = False) -> tuple[list[str], list
     min_expected = 50  # fallback if week isn't determinable
     if week_num:
         min_expected = min(400, 50 + (week_num - 1) * 45)
-    
+
     # Make sure this line is indented properly with 4 spaces:
     if len(players) < min_expected:
         errors.append(f"Only {len(players)} players — expected {min_expected}+ for week {week_num or '?'} (got {len(players)})")
