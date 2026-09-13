@@ -102,7 +102,9 @@ jobs:
         run: |
           git config user.name  "Gridiron Oracle Bot"
           git config user.email "bot@gridiron-oracle.app"
+          git stash
           git pull origin main --rebase
+          git stash pop
           DAY=$(date +%A)
           WEEK_LABEL="Weekly update"
           if [ "$DAY" = "Tuesday" ]; then WEEK_LABEL="Post-MNF stats update"; fi
@@ -150,7 +152,9 @@ jobs:
           git config user.name  "Gridiron Oracle Bot"
           git config user.email "bot@gridiron-oracle.app"
           git diff --quiet src/utils/espn_league.js || (
+            git stash &&
             git pull origin main --rebase &&
+            git stash pop &&
             git add src/utils/espn_league.js &&
             git commit -m "data: league refresh (rosters/waivers/standings) [${{ github.run_id }}]" &&
             git push origin main
@@ -184,7 +188,9 @@ jobs:
           git config user.name  "Gridiron Oracle Bot"
           git config user.email "bot@gridiron-oracle.app"
           git diff --quiet src/utils/nfl_data.js || (
+            git stash &&
             git pull origin main --rebase &&
+            git stash pop &&
             git add src/utils/nfl_data.js &&
             git commit -m "data: injury overlay [${{ github.run_id }}]" &&
             git push origin main
