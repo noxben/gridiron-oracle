@@ -18,12 +18,12 @@ name: NFL Data Pipeline
 on:
 #  temporarily turned off schedule while testing, remove comments once ready to deploy
 #  schedule:
-#    - cron: "0 12 * * 2"          # Tuesday — full stats refresh
-#    - cron: "0 13 * * 4"          # Thursday — full stats refresh
-#    - cron: "0 11 * * *"          # Daily — league fetch, morning
-#    - cron: "0 23 * * *"          # Daily — league fetch, evening
+#    - cron: "0 12 * * 2"         # Tuesday — full stats refresh
+#    - cron: "0 13 * * 4"         # Thursday — full stats refresh
+#    - cron: "0 11 * * *"         # Daily — league fetch, morning
+#    - cron: "0 23 * * *"         # Daily — league fetch, evening
 #    - cron: "0 15,17,19,21 * * 0" # Sunday — extra league fetches during games
-#    - cron: "0 15 * * 0"          # Sunday — injury overlay
+#    - cron: "0 15 * * 0"         # Sunday — injury overlay
   workflow_dispatch:
     inputs:
       week:
@@ -102,6 +102,7 @@ jobs:
         run: |
           git config user.name  "Gridiron Oracle Bot"
           git config user.email "bot@gridiron-oracle.app"
+          git pull origin main --rebase
           DAY=$(date +%A)
           WEEK_LABEL="Weekly update"
           if [ "$DAY" = "Tuesday" ]; then WEEK_LABEL="Post-MNF stats update"; fi
@@ -149,6 +150,7 @@ jobs:
           git config user.name  "Gridiron Oracle Bot"
           git config user.email "bot@gridiron-oracle.app"
           git diff --quiet src/utils/espn_league.js || (
+            git pull origin main --rebase &&
             git add src/utils/espn_league.js &&
             git commit -m "data: league refresh (rosters/waivers/standings) [${{ github.run_id }}]" &&
             git push origin main
@@ -182,6 +184,7 @@ jobs:
           git config user.name  "Gridiron Oracle Bot"
           git config user.email "bot@gridiron-oracle.app"
           git diff --quiet src/utils/nfl_data.js || (
+            git pull origin main --rebase &&
             git add src/utils/nfl_data.js &&
             git commit -m "data: injury overlay [${{ github.run_id }}]" &&
             git push origin main
