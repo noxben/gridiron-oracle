@@ -102,8 +102,16 @@ def validate(players: list[dict], strict: bool = False) -> tuple[list[str], list
         errors.append("NFL_PLAYERS array is empty")
         return errors, warnings
 
-    if len(players) < 400:
-    errors.append(f"Only {len(players)} players — expected 400+ for a full season (got {len(players)})")
+    # Player count naturally grows week-over-week as more games are played —
+    # a flat 400 floor was calibrated for full-season data and incorrectly
+    # flags legitimate early-season pulls (e.g. Week 1 genuinely has fewer
+    # recorded games than Week 10). Scale the expectation with current week.
+    week_num = players[0].get("_week_hint") if players else None  # see note below
+    min_expected = 50  # fallback if week isn't determinable
+    if week_num:
+        min_expected = min(400, 50 + (week_num - 1) * 45)
+    if len(players) < min_expected:
+        errors.append(f"Only {len(players)} players — expected {min_expected}+ for week {week_num or '?'} (got {len(players)})")
 
     for i, r in enumerate(players):
         ctx = f"[{i}] {r.get('name', '?')} ({r.get('gsis_id', 'NO_ID')})"
