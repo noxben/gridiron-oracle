@@ -16,7 +16,6 @@
 name: NFL Data Pipeline
 
 on:
-#  temporarily turned off schedule while testing, remove comments once ready to deploy
   schedule:
     - cron: "0 12 * * 2"         # Tuesday — full stats refresh
     - cron: "0 13 * * 4"         # Thursday — full stats refresh
