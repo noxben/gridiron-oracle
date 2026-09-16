@@ -183,15 +183,20 @@ jobs:
       - name: Apply injury overlay
         run: python scripts/injury_overlay.py
 
-      - name: Commit if changed
+      - name: Check for changes
+        id: changes
+        run: |
+          git diff --quiet src/utils/nfl_data.js && echo "changed=false" >> $GITHUB_OUTPUT || echo "changed=true" >> $GITHUB_OUTPUT
+
+      - name: Commit injury overlay
+        if: steps.changes.outputs.changed == 'true'
         run: |
           git config user.name  "Gridiron Oracle Bot"
           git config user.email "bot@gridiron-oracle.app"
-          git diff --quiet src/utils/nfl_data.js || (
-            git stash &&
-            git pull origin main --rebase &&
-            git stash pop &&
-            git add src/utils/nfl_data.js &&
-            git commit -m "data: injury overlay [${{ github.run_id }}]" &&
-            git push origin main
+          git stash
+          git pull origin main --rebase
+          git stash pop
+          git add src/utils/nfl_data.js
+          git commit -m "data: injury overlay [${{ github.run_id }}]"
+          git push origin main
           )
