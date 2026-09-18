@@ -187,7 +187,7 @@ jobs:
         run: |
           git diff --quiet src/utils/nfl_data.js && echo "changed=false" >> $GITHUB_OUTPUT || echo "changed=true" >> $GITHUB_OUTPUT
 
-            - name: Commit injury overlay
+      - name: Commit injury overlay
         if: steps.changes.outputs.changed == 'true'
         run: |
           git config user.name "Gridiron Oracle Bot"
