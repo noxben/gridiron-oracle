@@ -226,19 +226,21 @@ function findDropCandidate(position, myRoster, replacementMap) {
 // ---------------------------------------------------------------------------
 
 function enrichWithNflData(waiverPlayer) {
-  const gsisId    = ESPN_TO_GSIS[String(waiverPlayer.espn_id)];
+  const gsisId = ESPN_TO_GSIS[String(waiverPlayer.espn_id)];
   const nflRecord = gsisId ? PLAYER_BY_GSIS_ID?.[gsisId] : null;
-  if (!nflRecord) return waiverPlayer;
+  if (!nflRecord) return waiverPlayer; // ← if this fires often, ID mapping is the issue
+  const seasonAvg = typeof nflRecord.season_avg_pts === 'number' && !Number.isNaN(nflRecord.season_avg_pts)
+    ? nflRecord.season_avg_pts : 0;
   return {
     ...waiverPlayer,
     gsisId,
-    epa_per_play:   nflRecord.epa_per_play,
-    target_share:   nflRecord.target_share,
-    carry_share:    nflRecord.carry_share,
-    snap_pct:       nflRecord.snap_pct,
-    opp_def_rank:   nflRecord.opp_def_rank,
-    // Use nflfastR averages if ESPN projected is missing
-    projected_points: waiverPlayer.projected_points || nflRecord.season_avg_pts || waiverPlayer.avg_points,
+    epa_per_play: nflRecord.epa_per_play,
+    target_share: nflRecord.target_share,
+    carry_share: nflRecord.carry_share,
+    snap_pct: nflRecord.snap_pct,
+    opp_def_rank: nflRecord.opp_def_rank,
+    avg_points: seasonAvg || waiverPlayer.avg_points || 0,
+    projected_points: waiverPlayer.projected_points || seasonAvg || waiverPlayer.avg_points || 0,
   };
 }
 
