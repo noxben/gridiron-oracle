@@ -306,14 +306,14 @@ def fetch_waiver_pool(league):
 # ---------------------------------------------------------------------------
 
 def fetch_faab_budgets(league):
-    log.info("Fetching FAAB budgets...")
+    total = getattr(league.settings, 'acquisition_budget', 0) or 0
     faab_dict = {}
     try:
         for team in league.teams:
-            faab_dict[str(team.team_id)] = round(float(getattr(team, 'faab', 0) or 0), 2)
-        log.info(f"  {len(faab_dict)} teams")
+            spent = getattr(team, 'acquisition_budget_spent', 0) or 0
+            faab_dict[str(team.team_id)] = round(float(total) - float(spent), 2)
     except Exception as e:
-        log.warning(f"  FAAB fetch failed (non-blocking): {e}")
+        log.warning(f"FAAB fetch failed: {e}")
     return faab_dict
 
 
