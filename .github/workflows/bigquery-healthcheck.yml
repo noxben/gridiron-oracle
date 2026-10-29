@@ -1,0 +1,53 @@
+
+name: BigQuery connection healthcheck
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  healthcheck:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/1071844431903/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: ffl-oracle-archive-writer@ffl-oracle-513005.iam.gserviceaccount.com
+
+      - name: Set up Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Create table and test write
+        shell: bash
+        env:
+          PROJECT_ID: ffl-oracle-513005
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          bq query \
+            --project_id="$PROJECT_ID" \
+            --location=EU \
+            --use_legacy_sql=false <<SQL
+          CREATE TABLE IF NOT EXISTS
+            \`ffl-oracle-513005.ffl_oracle.pipeline_healthchecks\` (
+              checked_at TIMESTAMP NOT NULL,
+              workflow_run_id STRING NOT NULL,
+              repository STRING NOT NULL,
+              status STRING NOT NULL
+            )
+          PARTITION BY DATE(checked_at);
+
+          INSERT INTO
+            \`ffl-oracle-513005.ffl_oracle.pipeline_healthchecks\`
+          VALUES (
+            CURRENT_TIMESTAMP(),
+            '${RUN_ID}',
+            '${REPOSITORY}',
+            'ok'
+          );
+          SQL
