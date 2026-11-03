@@ -1368,11 +1368,6 @@ export default function MatchupExplorer({
     matchup?.opp_team_name ??
     'Opponent';
 
-  const oppTeam =
-    (ALL_TEAMS ?? []).find(
-      t => t.team_id === oppTeamId
-    );
-
   // -------------------------------------------------------------------------
   // Enrich my roster
   // -------------------------------------------------------------------------

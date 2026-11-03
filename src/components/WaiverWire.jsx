@@ -338,7 +338,7 @@ function FAABRange({ bid }) {
 // Waiver player row
 // ---------------------------------------------------------------------------
 
-function WaiverRow({ player, rank, dropCandidate, faabBid, myRoster }) {
+function WaiverRow({ player, rank, dropCandidate, faabBid }) {
   const [expanded, setExpanded] = useState(false);
 
   const pts          = player.projected_points ?? player.avg_points ?? 0;

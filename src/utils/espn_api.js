@@ -97,21 +97,6 @@ const DST_TEAM_MAP = {
  * ESPN_S2 and SWID are stored in sessionStorage (set via RosterSetup UI).
  * Never hardcoded — never committed to git.
  */
-function getAuthHeaders() {
-  const espnS2 = sessionStorage.getItem('ESPN_S2');
-  const swid   = sessionStorage.getItem('SWID');
-
-  if (!espnS2 || !swid) {
-    throw new ESPNAuthError(
-      'ESPN credentials not set. Enter your ESPN_S2 and SWID cookies in the setup screen.'
-    );
-  }
-
-  return {
-    'Content-Type': 'application/json',
-    'Cookie': `ESPN_S2=${espnS2}; SWID=${swid}`,
-  };
-}
 
 /**
  * Store ESPN credentials in sessionStorage.

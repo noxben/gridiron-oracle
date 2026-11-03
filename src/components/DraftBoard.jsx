@@ -4,7 +4,7 @@
 import { useState, useMemo } from 'react';
 import { ADP_LIST } from '../utils/adp_data.js';
 import { PLAYERS_BY_POSITION } from '../utils/nfl_data.js';
-import { computeCompositeRating, computeVORP, getReplacementLevel } from '../utils/simulator.js';
+import { computeCompositeRating, getReplacementLevel } from '../utils/simulator.js';
 import { C, font, serif, POS_COLOR } from '../utils/theme.js';
 import { AUCTION_HISTORY_BY_GSIS, AUCTION_HISTORY_META } from '../utils/auction_history.js';
 import { ESPN_AAV_BY_GSIS } from '../utils/espn_aav.js';

@@ -8,11 +8,8 @@ import { useMobile, contentPadding } from '../utils/useMobile.js';
 import { ESPN_LEAGUE_DATA } from '../utils/espn_league.js';
 import { ESPN_TO_GSIS } from '../utils/id_mapping.js';
 import {
-  prepareLineup,
   runSimulation,
   simulateMatchup,
-  getOptimalLineup,
-  rerunWithOverrides,
 } from '../utils/simulator.js';
 import { hasWeatherImpact, getWeatherAdvisory } from '../utils/weather_data.js';
 
@@ -463,7 +460,6 @@ export default function LineupOptimizer() {
   const { teamData } = useTeam();
   const { isMobile, isNarrow } = useMobile();
   const pad = contentPadding(isMobile, isNarrow);
-  const MY_ROSTER = teamData?.myRoster ?? [];
   const MY_TEAM   = teamData?.myTeam   ?? null;
   const MATCHUP   = teamData?.matchup  ?? null;
   const LEAGUE    = { team_count: 12 };
@@ -473,87 +469,16 @@ export default function LineupOptimizer() {
   const [progress,  setProgress]  = useState(0);
   const [overrides, setOverrides] = useState({});
   const [lineup,    setLineup]    = useState([]);
-  const [bench,     setBench]     = useState([]);
+
   const debounceRef = useRef(null);
 
   const leagueSize  = LEAGUE?.team_count ?? 12;
   const matchup     = MATCHUP;
 
-  // Build initial lineup on mount / when team changes
-  useEffect(() => {
-  if (!MY_ROSTER || MY_ROSTER.length === 0) return;
-
-  const starters = MY_ROSTER
-    .filter(p => !p.on_bench && !p.on_ir)
-    .map(p => ({
-      ...p,
-      projectedPts:    p.projected_points ?? p.avg_points ?? 0,
-      play_probability: p.play_probability ?? 1.0,
-      compositeRating: 50,
-      vorp:            0,
-      varianceMult:    1.0,
-      varianceProfile: 'standard',
-      scores:          { epa: 50, usage: 50, snap: 50, redZone: 50 },
-      opp_def_rank:    16,
-      lineupSlot:      p.lineup_slot,
-    }));
-
-  const benchPlayers = MY_ROSTER
-    .filter(p => p.on_bench || p.on_ir)
-    .map(p => ({
-      ...p,
-      gsisId:          p.gsisId, // changed from p.espn_id to p.gsisId
-      projectedPts:    p.projected_points ?? p.avg_points ?? 0,
-      play_probability: p.play_probability ?? 1.0,
-    }));
-
-  setLineup(starters);
-  setBench(benchPlayers);
-  runFallbackSim(starters);
-}, [MY_ROSTER?.length, teamData?.teamId]);
-
-  // Fallback: build lineup from ESPN data alone (before nfl_data.js is populated)
-  const buildFallbackLineup = useCallback(() => {
-    if (!MY_ROSTER) return;
-
-    const slotOrder = ['QB', 'RB', 'WR', 'TE', 'FLEX', 'K', 'DST'];
-    const starters  = MY_ROSTER
-      .filter(p => !p.on_bench && !p.on_ir)
-      .map(p => ({
-        espn_id:         p.espn_id,
-        name:            p.name,
-        position:        p.position,
-        team:            p.team,
-        lineupSlot:      p.lineup_slot,
-        projectedPts:    p.projected_points ?? p.avg_points ?? 0,
-        play_probability: p.play_probability ?? 1.0,
-        injuryDetail:    p.injury_detail ?? '',
-        compositeRating: 50,
-        vorp:            0,
-        varianceMult:    1.0,
-        varianceProfile: 'standard',
-        scores:          { epa: 50, usage: 50, snap: 50, redZone: 50 },
-        opp_def_rank:    16,
-      }))
-      .sort((a, b) => slotOrder.indexOf(a.lineupSlot) - slotOrder.indexOf(b.lineupSlot));
-
-    const benchPlayers = MY_ROSTER
-      .filter(p => p.on_bench || p.on_ir)
-      .map(p => ({
-        ...p,
-        gsisId:          p.gsisId, // changed from p.espn_id to p.gsisId
-        projectedPts:    p.projected_points ?? p.avg_points ?? 0,
-        play_probability: p.play_probability ?? 1.0,
-      }));
-
-    setLineup(starters);
-    setBench(benchPlayers);
-    runFallbackSim(starters);
-  }, []);
-
-  // Run simulation with current lineup + overrides
-  // v2.0: uses real opponent roster from espn_league.js via simulateMatchup
-  const runSim = useCallback(async (currentLineup, currentOverrides) => {
+  // Run simulation with current lineup + overrides.
+  // The simulator now owns player enrichment, projections, variance,
+  // VORP, opponent construction, and the Monte Carlo run.
+  const runSim = useCallback(async (currentLineup, currentOverrides = {}) => {
     if (!currentLineup || currentLineup.length === 0) return;
 
     setSimStatus('running');
@@ -562,17 +487,20 @@ export default function LineupOptimizer() {
     try {
       const oppTeamId = matchup?.opp_team_id;
 
-      // v2.0 path: real opponent roster available
+      // Preferred path: real ESPN opponent roster.
       if (oppTeamId && ESPN_LEAGUE_DATA?.rosters?.[String(oppTeamId)]) {
         const myRoster = currentLineup.map(p => ({
           ...p,
-          gsisId:           p.gsisId ?? p.espn_id,
-          projectedPts:     p.projectedPts ?? p.projected_points ?? p.avg_points ?? 5,
+          gsisId: p.gsisId ?? p.espn_id,
+          onBench: false,
+          onIR: false,
+          projectedPts:
+            p.projectedPts ??
+            p.projected_points ??
+            p.avg_points ??
+            0,
           play_probability: p.play_probability ?? 1.0,
-          varianceMult:     p.varianceMult ?? 1.0,
-          position:         p.position ?? 'WR',
-          onBench:          false,
-          onIR:             false,
+          position: p.position ?? 'WR',
         }));
 
         const simResult = await simulateMatchup(
@@ -580,92 +508,90 @@ export default function LineupOptimizer() {
           oppTeamId,
           ESPN_LEAGUE_DATA,
           ESPN_TO_GSIS,
-          currentOverrides ?? {},
+          currentOverrides,
           { leagueSize, onProgress: setProgress },
         );
+
         setResult(simResult);
-        setLineup(sortBySlot(simResult.myPlayers));   // ← NEW LINE
+        setLineup(sortBySlot(simResult.myPlayers));
         setSimStatus('done');
         return;
       }
 
-      // Fallback: espn_league.js not loaded or opponent not found — use projected total
-      console.warn('[LineupOptimizer] espn_league.js not available — falling back to synthetic opponent');
+      // Synthetic fallback only when no real opponent roster is available.
+      console.warn(
+        '[LineupOptimizer] ESPN opponent roster unavailable — using synthetic opponent'
+      );
+
       const oppProjected = matchup?.opp_projected ?? 100;
-      const oppLineup    = buildSyntheticOpponent(oppProjected);
+      const oppLineup = buildSyntheticOpponent(oppProjected);
 
       const prepared = currentLineup.map(p => ({
         ...p,
-        projectedPts:     p.projectedPts ?? p.projected_points ?? p.avg_points ?? 5,
+        projectedPts:
+          p.projectedPts ??
+          p.projected_points ??
+          p.avg_points ??
+          5,
         play_probability: p.play_probability ?? 1.0,
-        varianceMult:     p.varianceMult ?? 1.0,
-        position:         p.position ?? 'WR',
+        varianceMult: p.varianceMult ?? 1.0,
+        position: p.position ?? 'WR',
       }));
 
-      const simResult = await runSimulation(prepared, oppLineup, {
-        leagueSize,
-        onProgress: setProgress,
-      });
+      const simResult = await runSimulation(
+        prepared,
+        oppLineup,
+        { leagueSize, onProgress: setProgress },
+      );
+
       setResult(simResult);
-      setLineup(sortBySlot(simResult.myPlayers));   // ← NEW LINE
+      setLineup(sortBySlot(simResult.myPlayers));
       setSimStatus('done');
     } catch (err) {
-      console.error('Simulation failed:', err);
+      console.error('[LineupOptimizer] Simulation failed:', err);
       setSimStatus('idle');
     }
   }, [leagueSize, matchup]);
 
-  // Fallback sim — called on mount before nfl_data.js composite ratings are applied
-  // Still uses simulateMatchup for the opponent if espn_league.js is available
-  const runFallbackSim = useCallback(async (starters) => {
-    setSimStatus('running');
-    setProgress(0);
-    try {
-      const oppTeamId = matchup?.opp_team_id;
+  // Build the initial display from the ESPN roster, then immediately enrich
+  // it through the current simulator path.
+  useEffect(() => {
+    const roster = teamData?.myRoster ?? [];
 
-      if (oppTeamId && ESPN_LEAGUE_DATA?.rosters?.[String(oppTeamId)]) {
-        const myRoster = starters.map(p => ({
-          ...p,
-          gsisId:           p.gsisId ?? p.espn_id,
-          onBench:          false,
-          onIR:             false,
-        }));
-        const simResult = await simulateMatchup(
-          myRoster,
-          oppTeamId,
-          ESPN_LEAGUE_DATA,
-          ESPN_TO_GSIS,
-          {},
-          { leagueSize, onProgress: setProgress },
-        );
-        setResult(simResult);
-        setLineup(sortBySlot(simResult.myPlayers));   // ← NEW LINE
-        setSimStatus('done');
-        return;
-      }
+    if (roster.length === 0) return;
 
-      // Pure fallback — no league data
-      const oppProjected = matchup?.opp_projected ?? 100;
-      const oppLineup    = buildSyntheticOpponent(oppProjected);
-      const simResult    = await runSimulation(starters, oppLineup, {
-        leagueSize,
-        onProgress: setProgress,
-      });
-      setResult(simResult);
-      setLineup(sortBySlot(simResult.myPlayers));   // ← NEW LINE
-      setSimStatus('done');
-    } catch (err) {
-      console.error('Fallback sim failed:', err);
-      setSimStatus('idle');
-    }
-  }, [leagueSize, matchup]);
+    const starters = roster
+      .filter(p => !p.on_bench && !p.on_ir)
+      .map(p => ({
+        ...p,
+        gsisId: p.gsisId ?? p.espn_id,
+        onBench: false,
+        onIR: false,
+        projectedPts:
+          p.projected_points ??
+          p.avg_points ??
+          p.projectedPts ??
+          0,
+        play_probability: p.play_probability ?? 1.0,
+        lineupSlot: p.lineup_slot ?? p.lineupSlot,
+      }));
 
-  // Override change — debounce re-sim by 600ms
+    const timer = setTimeout(() => {
+      runSim(starters, {});
+    }, 0);
+
+    return () => clearTimeout(timer);
+  }, [teamData?.myRoster, teamData?.teamId, matchup, runSim]);
+
+  // Override change — debounce re-sim by 600ms.
   const handleOverride = useCallback((gsisId, value) => {
     const next = { ...overrides, [gsisId]: value };
     setOverrides(next);
 
-    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+    }
+
     debounceRef.current = setTimeout(() => {
       runSim(lineup, next);
     }, 600);
@@ -801,27 +727,34 @@ export default function LineupOptimizer() {
           </table>
 
           {/* Bench */}
-          {bench.length > 0 && (
-            <>
-              <div style={{
-                fontSize: '9px', letterSpacing: '0.18em',
-                textTransform: 'uppercase', color: C.textDim,
-                margin: '24px 0 8px',
-              }}>
-                Bench
-              </div>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <tbody>
-                  {bench.map((player, i) => (
-                    <BenchRow
-                      key={player.espn_id ?? i}
-                      player={player}
-                    />
-                  ))}
-                </tbody>
-              </table>
-            </>
-          )}
+          {(() => {
+            const benchPlayers = (teamData?.myRoster ?? [])
+              .filter(p => p.on_bench || p.on_ir);
+
+            if (benchPlayers.length === 0) return null;
+
+            return (
+              <>
+                <div style={{
+                  fontSize: '9px', letterSpacing: '0.18em',
+                  textTransform: 'uppercase', color: C.textDim,
+                  margin: '24px 0 8px',
+                }}>
+                  Bench
+                </div>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <tbody>
+                    {benchPlayers.map((player, i) => (
+                      <BenchRow
+                        key={player.espn_id ?? i}
+                        player={player}
+                      />
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            );
+          })()}
 
           {/* Variance callout */}
           {result?.highestVariancePlayer && (

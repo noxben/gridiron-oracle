@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 // TeamContext.jsx — Gridiron Oracle
 // Provides active team_id and derived roster/matchup data to all views.
 // Replaces direct imports of MY_ROSTER/MY_TEAM from espn_data.js for

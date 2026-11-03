@@ -8,16 +8,12 @@ import { useMobile, contentPadding } from '../utils/useMobile.js';
 import {
   ESPN_LEAGUE_DATA,
   ALL_ROSTERS,
-  FULL_SCHEDULE,
   LEAGUE_FETCHED_AT,
 } from '../utils/espn_league.js';
 import { PLAYER_BY_GSIS_ID } from '../utils/nfl_data.js';
 import { ESPN_TO_GSIS } from '../utils/id_mapping.js';
 import {
-  prepareLineup,
-  runSimulation,
   simulateMatchup,
-  computeVORP,
   getReplacementLevel,
   getOptimalLineup,
 } from '../utils/simulator.js';
@@ -39,7 +35,14 @@ function computeFairnessRating(givingPlayers, receivingPlayers, leagueSize = 12)
     players.reduce((sum, p) => {
       const gsisId  = ESPN_TO_GSIS[String(p.espn_id)] ?? p.gsisId;
       const nflData = gsisId ? PLAYER_BY_GSIS_ID?.[gsisId] : null;
-      const pts     = nflData?.season_avg_pts ?? p.projected_points ?? p.avg_points ?? 0;
+      const pts = nflData
+        ? getOptimalLineup(
+            [{ ...p, gsisId }],
+            {},
+            leagueSize
+          )[0]?.projectedPts ?? 0
+        : (p.projected_points ?? p.avg_points ?? 0);
+
       const replLvl = getReplacementLevel(p.position, leagueSize);
       return sum + (pts - replLvl);
     }, 0);
@@ -103,7 +106,6 @@ function normalizeRoster(rosterEntries) {
 // ---------------------------------------------------------------------------
 
 function computeROSValue(rosterEntries, myTeamId, leagueSize = 12) {
-  const schedule      = FULL_SCHEDULE ?? [];
   const currentWeek   = ESPN_LEAGUE_DATA?.current_week ?? 1;
   const remainingWeeks = Math.max(0, 17 - currentWeek);
 
@@ -434,12 +436,11 @@ export default function TradeAnalyzer() {
           { leagueSize },
         );
 
-        // After trade — run optimal lineup from post-trade roster
-        const afterRoster  = normalizeRoster(postTradeRoster);
-        const afterOptimal = getOptimalLineup(afterRoster, {}, leagueSize)
-          .map(p => ({ ...p, onBench: false, onIR: false }));
+        // After trade — simulate the post-trade roster. The simulator
+        // performs the current lineup/player enrichment internally.
+        const afterRoster = normalizeRoster(postTradeRoster);
 
-        const afterResult  = await simulateMatchup(
+        const afterResult = await simulateMatchup(
           afterRoster,
           oppTeamId,
           ESPN_LEAGUE_DATA,
@@ -462,7 +463,15 @@ export default function TradeAnalyzer() {
       console.error('Trade analysis failed:', err);
       setSimStatus('error');
     }
-  }, [canAnalyze, givingPlayers, receivingPlayers, myRoster, leagueSize]);
+  }, [
+    canAnalyze,
+    givingPlayers,
+    receivingPlayers,
+    myRoster,
+    leagueSize,
+    MY_TEAM,
+    MATCHUP,
+  ]);
 
   const resetTrade = useCallback(() => {
     setGivingIds(new Map());

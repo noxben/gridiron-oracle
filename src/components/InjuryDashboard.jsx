@@ -158,7 +158,7 @@ function PosTag({ pos }) {
   );
 }
 
-function ReplacementCard({ label, player, isWaiver }) {
+function ReplacementCard({ player, isWaiver }) {
   if (!player) return null;
 
   const pts = player.projected_points ?? player.avg_points ?? 0;

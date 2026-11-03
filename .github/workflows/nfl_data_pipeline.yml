@@ -15,157 +15,187 @@ name: NFL Data Pipeline
 
 on:
   schedule:
-    # Tuesday 12:00 UTC — after Monday Night Football stats finalize
     - cron: "0 12 * * 2"
-    # Thursday 13:00 UTC — before Thursday Night Football, captures injury report
     - cron: "0 13 * * 4"
 
   workflow_dispatch:
     inputs:
       week:
-        description: "NFL week number (leave blank to auto-detect)"
+        description: "Feature cutoff week (blank = latest completed)"
         required: false
         type: string
       season:
         description: "NFL season year"
         required: false
-        default: "2024"
+        default: "2026"
         type: string
       dry_run:
-        description: "Dry run (build data but don't commit)"
+        description: "Build data without committing or archiving"
         required: false
         default: false
         type: boolean
 
+permissions:
+  contents: write
+  id-token: write
+
 jobs:
   update-data:
-    name: Update NFL Data
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    permissions:
-      contents: write
-      pull-requests: write
-
-    steps:
-      # ── Checkout ─────────────────────────────────────────────────────────
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      # ── Python setup ─────────────────────────────────────────────────────
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: "pip"
-
-      - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install nfl_data_py pandas requests python-dotenv
-
-      # ── Run pipeline ──────────────────────────────────────────────────────
-      - name: Run data pipeline
-        id: pipeline
-        run: |
-          ARGS=""
-          if [ -n "${{ github.event.inputs.week }}" ]; then
-            ARGS="$ARGS --week ${{ github.event.inputs.week }}"
-          fi
-          if [ -n "${{ github.event.inputs.season }}" ]; then
-            ARGS="$ARGS --season ${{ github.event.inputs.season }}"
-          fi
-          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
-            ARGS="$ARGS --dry-run"
-          fi
-
-          python scripts/update_nfl_data.py $ARGS
-
-          # Capture player count for commit message
-          PLAYER_COUNT=$(python -c "
-          import re, json
-          content = open('src/utils/nfl_data.js').read()
-          m = re.search(r'player_count: (\d+)', content)
-          print(m.group(1) if m else '?')
-          ")
-          echo "player_count=$PLAYER_COUNT" >> $GITHUB_OUTPUT
-
-      # ── Validate ──────────────────────────────────────────────────────────
-      - name: Validate output
-        run: |
-          python scripts/validate_data.py
-
-      # ── Commit and push ───────────────────────────────────────────────────
-      - name: Check for changes
-        id: changes
-        run: |
-          git diff --quiet src/utils/nfl_data.js && echo "changed=false" >> $GITHUB_OUTPUT || echo "changed=true" >> $GITHUB_OUTPUT
-
-      - name: Commit updated nfl_data.js
-        if: steps.changes.outputs.changed == 'true' && github.event.inputs.dry_run != 'true'
-        run: |
-          git config user.name  "Gridiron Oracle Bot"
-          git config user.email "bot@gridiron-oracle.app"
-
-          # Detect day for commit message context
-          DAY=$(date +%A)
-          WEEK_LABEL="Weekly update"
-          if [ "$DAY" = "Tuesday" ]; then
-            WEEK_LABEL="Post-MNF stats update"
-          elif [ "$DAY" = "Thursday" ]; then
-            WEEK_LABEL="Pre-TNF injury update"
-          fi
-
-          git add src/utils/nfl_data.js
-          git commit -m "data: $WEEK_LABEL — ${{ steps.pipeline.outputs.player_count }} players [${{ github.run_id }}]"
-          git push origin main
-
-      - name: No changes detected
-        if: steps.changes.outputs.changed == 'false'
-        run: echo "nfl_data.js is already up to date — no commit needed"
-
-      # ── Failure notification ───────────────────────────────────────────────
-      - name: Pipeline summary
-        if: always()
-        run: |
-          echo "## Pipeline Result" >> $GITHUB_STEP_SUMMARY
-          echo "- **Status:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Players:** ${{ steps.pipeline.outputs.player_count }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Changes committed:** ${{ steps.changes.outputs.changed }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Run:** ${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
-
-  # Separate job: injury-only overlay (runs Thursday + Sunday without full stat refresh)
-  injury-overlay:
-    name: Injury Report Overlay
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    # Only run on Sundays (separate from Tuesday/Thursday full pipeline)
-    if: github.event_name == 'schedule' && github.event.schedule == '0 15 * * 0'
-
-    permissions:
-      contents: write
+    timeout-minutes: 30
+    outputs:
+      changed: ${{ steps.changes.outputs.changed }}
+      source_week: ${{ steps.pipeline.outputs.source_week }}
+      season: ${{ steps.pipeline.outputs.season }}
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
+          cache: pip
 
-      - run: pip install nfl_data_py pandas python-dotenv
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
 
-      - name: Apply injury overlay
-        run: python scripts/injury_overlay.py
-
-      - name: Commit if changed
+      - name: Install dependencies
         run: |
-          git config user.name  "Gridiron Oracle Bot"
+          python -m pip install --upgrade pip
+          pip install nflreadpy pandas python-dotenv
+          npm ci
+
+      - name: Run data pipeline
+        id: pipeline
+        run: |
+          SEASON="${{ inputs.season }}"
+          WEEK="${{ inputs.week }}"
+          DRY_RUN="${{ inputs.dry_run }}"
+
+          if [ -z "$SEASON" ]; then SEASON=2026; fi
+
+          ARGS=(--season "$SEASON")
+          if [ -n "$WEEK" ]; then ARGS+=(--week "$WEEK"); fi
+          if [ "$DRY_RUN" = "true" ]; then ARGS+=(--dry-run); fi
+
+          python scripts/update_nfl_data.py "${ARGS[@]}"
+
+          python - <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          text = Path("src/utils/nfl_data.js").read_text()
+          season = re.search(r"season:\s*(\d+)", text)
+          week = re.search(r"week:\s*(\d+)", text)
+          if not season or not week:
+              raise SystemExit("Could not read NFL_DATA_META")
+
+          with open(Path.home() / ".dummy", "w") as f:
+              pass
+
+          with open("$GITHUB_OUTPUT", "a") as f:
+              f.write(f"season={season.group(1)}\n")
+              f.write(f"source_week={week.group(1)}\n")
+          PY
+
+      - name: Validate output
+        run: python scripts/validate_data.py
+
+      - name: Detect changes
+        id: changes
+        run: |
+          if git diff --quiet -- src/utils/nfl_data.js; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit updated data
+        if: inputs.dry_run != true && steps.changes.outputs.changed == 'true'
+        run: |
+          git config user.name "Gridiron Oracle Bot"
           git config user.email "bot@gridiron-oracle.app"
-          git diff --quiet src/utils/nfl_data.js || (
-            git add src/utils/nfl_data.js &&
-            git commit -m "data: Sunday injury overlay [${{ github.run_id }}]" &&
-            git push origin main
-          )
+          git add src/utils/nfl_data.js
+          git commit -m "data: NFL week ${{ steps.pipeline.outputs.source_week }} update"
+          git push origin main
+
+      - name: Pipeline summary
+        if: always()
+        run: |
+          echo "## NFL Data Pipeline" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Status: ${{ job.status }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Season: ${{ steps.pipeline.outputs.season }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Feature cutoff week: ${{ steps.pipeline.outputs.source_week }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Data changed: ${{ steps.changes.outputs.changed }}" >> "$GITHUB_STEP_SUMMARY"
+
+  archive:
+    needs: update-data
+    if: >-
+      needs.update-data.result == 'success' &&
+      github.event_name == 'schedule' &&
+      github.event.schedule == '0 12 * * 2'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          python -m pip install --upgrade pip
+          pip install nflreadpy pandas python-dotenv
+
+      - name: Run archive tests
+        run: node --test scripts/test_archive_forecasts.mjs
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/1071844431903/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: ffl-oracle-archive-writer@ffl-oracle-513005.iam.gserviceaccount.com
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Archive next forecast week
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          SEASON="${{ needs.update-data.outputs.season }}"
+          SOURCE_WEEK="${{ needs.update-data.outputs.source_week }}"
+          TARGET_WEEK=$((SOURCE_WEEK + 1))
+
+          if [ "$TARGET_WEEK" -gt 18 ]; then
+            echo "No next regular-season forecast week after week 18."
+            exit 0
+          fi
+
+          node scripts/archive_forecasts_bigquery.mjs \
+            --season "$SEASON" \
+            --week "$TARGET_WEEK" \
+            --write
+
+      - name: Upload archive artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: forecast-archive-${{ needs.update-data.outputs.season }}-week-${{ needs.update-data.outputs.source_week }}
+          path: outputs/forecast_archive/*.json
+          if-no-files-found: warn

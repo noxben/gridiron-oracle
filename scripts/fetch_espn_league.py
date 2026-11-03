@@ -308,12 +308,36 @@ def fetch_waiver_pool(league):
 def fetch_faab_budgets(league):
     log.info("Fetching FAAB budgets...")
     faab_dict = {}
+
     try:
+        # ESPN gives us the league's starting FAAB budget and each team's
+        # amount already spent. Convert that into remaining FAAB.
+        league_budget = float(
+            getattr(league.settings, 'acquisition_budget', 0) or 0
+        )
+
+        log.info(f"  League FAAB budget: ${league_budget:.2f}")
+
         for team in league.teams:
-            faab_dict[str(team.team_id)] = round(float(getattr(team, 'faab', 0) or 0), 2)
+            spent = float(
+                getattr(team, 'acquisition_budget_spent', 0) or 0
+            )
+
+            remaining = max(0.0, league_budget - spent)
+
+            faab_dict[str(team.team_id)] = round(remaining, 2)
+
+            log.info(
+                f"  {team.team_name}: "
+                f"${remaining:.2f} remaining "
+                f"(${spent:.2f} spent)"
+            )
+
         log.info(f"  {len(faab_dict)} teams")
+
     except Exception as e:
         log.warning(f"  FAAB fetch failed (non-blocking): {e}")
+
     return faab_dict
 
 

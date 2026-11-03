@@ -58,11 +58,11 @@ export default function PasscodeEntry({ onSuccess }) {
     if (pasted.length === 4) {
       setDigits(pasted.split(''));
       inputRefs[3].current?.focus();
-      submit(pasted, pasted.split(''));
+      submit(pasted);
     }
   };
 
-  const submit = (code, digitArr) => {
+  const submit = (code) => {
     const teamId = TEAM_CODES[code];
     if (!teamId) {
       setShake(true);
@@ -81,7 +81,6 @@ export default function PasscodeEntry({ onSuccess }) {
 	  }
 
     // Success
-    const team = (ALL_TEAMS ?? []).find(t => t.team_id === teamId);
     setSuccess(true);
     setTimeout(() => onSuccess(teamId), 800);
   };

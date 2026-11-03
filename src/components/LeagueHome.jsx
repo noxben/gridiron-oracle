@@ -379,7 +379,7 @@ function StandingsTable({ standings, powerRankedTeams, myTeamId }) {
         </tr>
       </thead>
       <tbody>
-        {standings.map((team, i) => {
+        {standings.map(team => {
           const mine = isMyTeam(team.team_id, myTeamId);
           const pwr  = powerRankMap[team.team_id];
           const pwrDelta = team.seed - pwr; // positive = ranked higher by power than by record
