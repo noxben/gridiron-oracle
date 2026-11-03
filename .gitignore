@@ -30,3 +30,5 @@ __pycache__/
 .DS_Store
 *.bak
 outputs/
+
+espn cookies.txt
