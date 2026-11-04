@@ -49,7 +49,7 @@ jobs:
         run: node --test scripts/test_archive_forecasts.mjs
 
       - name: Authenticate to Google Cloud
-        if: ${{ inputs.write }}
+        if: inputs.write && github.ref == 'refs/heads/main'
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: projects/1071844431903/locations/global/workloadIdentityPools/github-pool/providers/github-provider
@@ -61,6 +61,11 @@ jobs:
         env:
           GITHUB_SHA: ${{ github.sha }}
         run: |
+          if [ "${{ inputs.write }}" = "true" ] && [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "ERROR: BigQuery writes are only permitted from main."
+            exit 1
+          fi
+
           ARGS="--season ${{ inputs.season }} --week ${{ inputs.week }}"
           if [ "${{ inputs.write }}" = "true" ]; then
             node scripts/archive_forecasts_bigquery.mjs $ARGS --write

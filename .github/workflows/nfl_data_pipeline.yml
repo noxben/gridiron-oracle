@@ -116,7 +116,7 @@ jobs:
           fi
 
       - name: Commit updated data
-        if: inputs.dry_run != true && steps.changes.outputs.changed == 'true'
+        if: github.ref == 'refs/heads/main' && inputs.dry_run != true && steps.changes.outputs.changed == 'true'
         run: |
           git config user.name "Gridiron Oracle Bot"
           git config user.email "bot@gridiron-oracle.app"
@@ -138,7 +138,8 @@ jobs:
     if: >-
       needs.update-data.result == 'success' &&
       github.event_name == 'schedule' &&
-      github.event.schedule == '0 12 * * 2'
+      github.event.schedule == '0 12 * * 2' &&
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
