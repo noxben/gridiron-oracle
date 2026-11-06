@@ -207,4 +207,12 @@ Private ESPN league — #siscocks (ID: 839979) — 12 teams, PPR scoring, standa
 
 ---
 
+## Work with me
+
+Available for freelance projects involving data engineering, ETL pipelines, SQL, Python, and API integration.
+
+[View my Upwork profile](https://www.upwork.com/freelancers/~016d177ab22e4606f5)
+
+---
+
 *Gridiron Oracle · Built March 2026 · Confidential*
