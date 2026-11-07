@@ -203,7 +203,7 @@ For automated data refresh (nflfastR stats only), GitHub Actions runs the pipeli
 
 ## League
 
-Private ESPN league — #siscocks (ID: 839979) — 12 teams, PPR scoring, standard lineup.
+Private ESPN league — #siscocks (ID:) — 12 teams, PPR scoring, standard lineup.
 
 ---
 
